@@ -8,9 +8,13 @@ vectors-tmp/
 *.swp
 *~
 
-# EC theory shells (work-in-progress; targeted for v0.5.0 commit).
-# At v0.3.0 PROOF-CLAIMS.md §3.1 explicitly states "no EC theories
-# ship at v0.3.0" — keeping these out of the working-tree-clean
-# check until they reach the admit-budget closure stage Pulsar
-# v1.0.7 holds (admit 0/0 across 13 EC files).
-proofs/
+# EC theory shells admit-closed at v0.4.0 (admit 0/0 across 13 EC
+# files mirroring Pulsar v1.0.7 reference). proofs/ now tracked.
+
+# dudect external dependency clone (fetched on demand; never
+# committed).
+ct/dudect/dudect/
+
+# Jasmin slh-dsa upstream subtree (libjade-SLH-DSA when it lands;
+# fetched on demand).
+jasmin/slh-dsa/libjade/
