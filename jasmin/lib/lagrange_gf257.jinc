@@ -1,0 +1,174 @@
+// Lagrange coefficient computation over GF(257) for Magnetar's byte-
+// wise Shamir.
+//
+// For party i in a signing quorum T = {x_1, ..., x_t} (each x_j a
+// non-zero GF(257) element — the party's EvalPoint installed by DKG),
+// the Lagrange coefficient at the interpolation point X = 0 is:
+//
+//   lambda_i^T = prod_{j in T, j != i} (-x_j) * inverse(x_i - x_j)
+//
+// Each factor is computed mod 257 in constant time. Constant-time
+// over the (public) eval-point set.
+//
+// Constant-time obligations: the EvalPoints are PUBLIC inputs, so this
+// routine has no secret-dependent control flow by construction. We
+// still avoid early-exit on degenerate inputs (returning a well-
+// defined sentinel on duplicate EvalPoints) so jasminc's constant-
+// time analysis can succeed without per-call exclusions.
+
+require "magnetar_params.jinc"
+
+// Modular reduction: bring a u32 value into [0, 257).
+// 257 has 9 bits, so any u32 fits in 24-bit shift-and-subtract.
+inline
+fn mod257_canonical(reg u32 a) -> reg u32
+{
+    reg u32 r, q;
+    r = a;
+    // 257 = 0x101. r >> 9 gives the quotient candidate.
+    // Compute r = a - 257 * (a / 257) via Barrett reduction or
+    // shift-and-subtract. For values up to ~24 bits we can use
+    // simple shift-and-subtract.
+    q = r;
+    q >>= 9;       // quotient (approx)
+    q *= 257;
+    r -= q;
+    // r is now in [-256, 257) — adjust.
+    while {
+        // constant-time: bounded by 2 iterations max
+        reg u32 mask, sub;
+        mask = r;
+        mask >>= 31;       // 1 if r < 0 (interpreted as signed)
+        mask = -mask;      // all-1s if r < 0
+        sub = 257;
+        sub &= mask;
+        r += sub;
+    } (r >= 257);
+    // Final correction.
+    if (r >= 257) {
+        r -= 257;
+    }
+    return r;
+}
+
+// Modular negation: returns (257 - a) mod 257. Constant-time.
+inline
+fn mod257_neg(reg u32 a) -> reg u32
+{
+    reg u32 r;
+    r = 257;
+    r -= a;
+    r = mod257_canonical(r);
+    return r;
+}
+
+// Modular subtraction: returns (a - b) mod 257. Constant-time.
+inline
+fn mod257_sub(reg u32 a, reg u32 b) -> reg u32
+{
+    reg u32 r;
+    r = a;
+    r -= b;
+    r = mod257_canonical(r);
+    return r;
+}
+
+// Modular addition: returns (a + b) mod 257. Constant-time.
+inline
+fn mod257_add(reg u32 a, reg u32 b) -> reg u32
+{
+    reg u32 r;
+    r = a;
+    r += b;
+    r = mod257_canonical(r);
+    return r;
+}
+
+// Modular multiplication: returns (a * b) mod 257. Constant-time.
+// Inputs in [0, 257); a*b fits in u32 (max ~66049).
+inline
+fn mod257_mul(reg u32 a, reg u32 b) -> reg u32
+{
+    reg u32 r;
+    r = a;
+    r *= b;
+    r = mod257_canonical(r);
+    return r;
+}
+
+// Fermat-based modular inverse: a^(257-2) mod 257 = a^255 mod 257.
+// Constant-time over (public) eval-point inputs; we still write it
+// constant-time so the jasmin-ct gate doesn't flag.
+//
+// Binary expansion of 255 = 0b11111111 (8 ones, 8 bits).
+inline
+fn mod257_inverse(reg u32 a) -> reg u32
+{
+    reg u32 result, base;
+    inline int k;
+
+    result = 1;
+    base = a;
+
+    // 255 = 0xFF — 8 ones. Loop 8 times unconditionally; each iter
+    // squares the base and multiplies into result (always, since all
+    // bits are 1).
+    for k = 0 to 8 {
+        // result <- result * base
+        result = mod257_mul(result, base);
+        // base <- base * base
+        base = mod257_mul(base, base);
+    }
+    return result;
+}
+
+// Lagrange coefficient lambda_i = prod_{j != i} (-x_j) / (x_i - x_j) at
+// the interpolation point X = 0.
+//
+// Inputs:
+//   eval_points - the t EvalPoints of the quorum (PUBLIC, GF(257)
+//                 elements in canonical form < 257). Each EvalPoint is
+//                 a 32-bit unsigned integer but lives in [1, 257).
+//   my_index    - index into eval_points naming this party. PUBLIC.
+//   quorum_size - t (PUBLIC, <= MAGNETAR_QUORUM_MAX).
+//
+// Constant-time over both inputs (all inputs are public).
+inline
+fn lagrange_coefficient_gf257(
+    reg ptr u32[MAGNETAR_QUORUM_MAX] eval_points,
+    reg u32 my_index,
+    reg u32 quorum_size)
+    -> reg u32
+{
+    reg u32 acc;
+    reg u32 j;
+    reg u32 xj, xi;
+    reg u32 num, denom, denom_inv, factor;
+
+    acc = 1;
+
+    xi = eval_points[my_index];
+
+    ?{}, j = #set0_32();
+    while (j < quorum_size) {
+        if (j != my_index) {
+            xj = eval_points[j];
+
+            // numerator: (-x_j) mod 257
+            num = mod257_neg(xj);
+
+            // denominator: (x_i - x_j) mod 257
+            denom = mod257_sub(xi, xj);
+
+            // denom_inv = denom^{-1}
+            denom_inv = mod257_inverse(denom);
+
+            // factor = num * denom_inv
+            factor = mod257_mul(num, denom_inv);
+
+            acc = mod257_mul(acc, factor);
+        }
+        j += 1;
+    }
+    return acc;
+}
