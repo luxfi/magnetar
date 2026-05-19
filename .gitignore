@@ -1,0 +1,9 @@
+# Build / test scratch directories
+vectors-first/
+vectors-second/
+vectors-tmp/
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
