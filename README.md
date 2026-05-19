@@ -107,7 +107,7 @@ end-to-end example.
 
 ## Cross-references
 
-- [`luxfi/quasar`](https://github.com/luxfi/quasar) — umbrella spec; Magnetar is `PRIMITIVES.md` row
+- [`luxfi/quasar`](https://github.com/luxfi/quasar) — Quasar, the Lux PQ-finality singularity; Magnetar is `PRIMITIVES.md` row
 - [`luxfi/pulsar`](https://github.com/luxfi/pulsar) — sibling threshold M-LWE primitive (Tier A production)
 - [`luxfi/corona`](https://github.com/luxfi/corona) — sibling threshold R-LWE primitive (Tier A submission)
 
