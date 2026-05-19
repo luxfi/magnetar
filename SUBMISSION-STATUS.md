@@ -1,15 +1,17 @@
 # NIST MPTC Submission Status — Magnetar
 
 > Honest status of Magnetar's path to NIST Multi-Party Threshold
-> Cryptography submission. **Tier B** as of v0.2.0
-> (production library + submission scaffold shipped). Mechanized
-> refinement + independent audit on the roadmap to Tier A.
+> Cryptography submission. **Tier A documentation shape complete**
+> as of v0.3.0. Mechanized refinement, dudect, v0.4 lifecycle
+> additions (ML-KEM envelope wrap + reshare), and external audit
+> are the remaining gates to **full Tier A**.
 
-## Today (v0.2.0)
+## Today (v0.3.0)
 
-**Tier B: production library + submission scaffold landed.**
+**Tier A documentation shape complete; full Tier A formal-methods
++ measurement + lifecycle gates open.**
 
-Specifically:
+Specifically (carried forward from v0.2.0 and extended at v0.3.0):
 
 - **Construction selected.** v0.1 reveal-and-aggregate over the
   SLH-DSA scheme seed (Shamir VSS in GF(257), Lagrange
@@ -18,30 +20,50 @@ Specifically:
 - **Reference implementation shipped.** `ref/go/pkg/magnetar/` —
   pure Go on top of `cloudflare/circl/sign/slhdsa`. Single-party
   + DKG + threshold-sign + Combine. Three parameter sets
-  (SHAKE-192s / SHAKE-192f / SHAKE-256s).
+  (SHAKE-192s / SHAKE-192f / SHAKE-256s). ~2186 LOC production
+  Go, 76.8% test coverage.
 - **KAT vectors shipped.** `vectors/{keygen,sign,verify,
   threshold-sign,dkg}.json` — deterministic regeneration via
-  `cmd/genkat`.
-- **Class-N1-analog evidence shipped.**
+  `ref/go/cmd/genkat`.
+- **Class-N1 evidence shipped.**
   `n1_byte_equality_test.go` — threshold-produced signatures are
   byte-identical to single-party `slhdsa.SignDeterministic` on
-  the reconstructed master seed; verifies under unmodified
-  FIPS 205.
+  the reconstructed master seed across (3,2), (5,3), (7,4)
+  configurations; verifies under unmodified FIPS 205.
 - **Honest trust-model disclosure shipped.**
   `DEPLOYMENT-RUNBOOK.md` documents the v0.1 reveal-and-aggregate
   aggregator-as-TCB caveat with the same rigor as Pulsar's.
+- **Tier A documentation shape complete (v0.3.0).** Full 12-document
+  submission package shape, mirroring Pulsar's structure:
+  `SUBMISSION.md`, `NIST-SUBMISSION.md`, `SPEC.md`, `PATENTS.md`,
+  `PROOF-CLAIMS.md`, `AXIOM-INVENTORY.md`, `FIPS-TRACEABILITY.md`,
+  `TRUSTED-COMPUTING-BASE.md`, `CRYPTOGRAPHER-SIGN-OFF.md`,
+  `DEPLOYMENT-RUNBOOK.md`, `BLOCKERS.md`, `SUBMISSION-STATUS.md`.
+- **Internal cryptographer sign-off shipped (v0.3.0).**
+  `CRYPTOGRAPHER-SIGN-OFF.md` — APPROVED WITH GATES, mirroring
+  Pulsar's exact structure. Five open gates tracked.
+- **Submission orchestration shipped (v0.3.0).**
+  `scripts/cut-submission.sh` (8-step tarball cut with KAT-determinism
+  verification) + `scripts/check-high-assurance.sh` (per-push gate).
 
-What is **NOT** yet shipped (the Tier B → A gap):
+What is **NOT** yet shipped (the gates to full Tier A — tracked
+in `CRYPTOGRAPHER-SIGN-OFF.md` Gates section):
 
-- **Proof artifacts** (EasyCrypt theories, Lean bridges, Jasmin
-  sources). See `BLOCKERS.md` BLK-7. This is multi-month research.
-- **Constant-time analysis** of the threshold layer under `dudect`
-  or formal tooling.
-- **ML-KEM-768 wrapping** of DKG Round-1 envelopes (closes
-  passive-network-observer channel). v0.1 envelopes are plaintext.
-- **Independent cryptographer review.** See `BLOCKERS.md` BLK-9.
-- **Full 16-document submission package** mirroring Pulsar's
-  layout. See `BLOCKERS.md` BLK-8.
+- **GATE-1: EC theory shells for the threshold overlay**. The
+  single-party FIPS 205 layer is NIST-anchored; the threshold
+  overlay is novel. Cross-citation to Pulsar's Lean ↔ EC bridges
+  for the GF(257) Shamir / Lagrange algebraic identities; new EC
+  theory shells needed for the cSHAKE256 mix + `KeyFromSeed →
+  SignDeterministic` dispatch. **Roadmap v0.5.0; multi-month research.**
+- **GATE-2: Lean ↔ EC bridge**. Cross-citation closure to Pulsar's
+  bridges. **Roadmap v0.5.0.**
+- **GATE-3: dudect 10⁹ samples on the threshold overlay**.
+  **Roadmap v0.6.0.**
+- **GATE-4: external cryptographer audit**. **Roadmap v0.6.0.**
+- **GATE-5: v0.4 lifecycle additions**. ML-KEM-768 wrapping of
+  DKG Round-1 envelopes (closes passive-network-observer channel)
+  + Reshare protocol (Refresh + ReshareToNewSet) for Class N4-analog
+  evidence. **Roadmap v0.4.0.**
 
 ## Why this is not Pulsar (still, at Tier B)
 
@@ -91,25 +113,31 @@ submission-package authoring + parallel independent review.
 - Jasmin constant-time analysis of the threshold layer (DKG / Combine / Round1 / Round2)
 - Output target: `proofs/`, `jasmin/`
 
-### Phase 4 — Submission package (OPEN, BLK-8)
+### Phase 4 — Submission package (CLOSED v0.3.0 for documentation shape; full Tier A formal-methods gates open)
 
-Mirror Pulsar's 16-doc structure adapted to Magnetar's specifics:
+Mirror Pulsar's 12-doc structure adapted to Magnetar's specifics:
 
-- `SUBMISSION.md`, `NIST-SUBMISSION.md`, `SPEC.md`
-- `PATENTS.md`, `PROOF-CLAIMS.md`, `AXIOM-INVENTORY.md`,
-  `FIPS-TRACEABILITY.md`, `TRUSTED-COMPUTING-BASE.md`
-- `CHANGELOG.md`, `DEPLOYMENT-RUNBOOK.md` (✅ landed v0.2.0)
-- `docs/{evaluation,nist-mptc-category,design-decisions,
+- ✅ `SUBMISSION.md`, `NIST-SUBMISSION.md`, `SPEC.md` (landed v0.3.0)
+- ✅ `PATENTS.md`, `PROOF-CLAIMS.md`, `AXIOM-INVENTORY.md`,
+  `FIPS-TRACEABILITY.md`, `TRUSTED-COMPUTING-BASE.md` (landed v0.3.0)
+- ✅ `CHANGELOG.md` (landed v0.3.0), `DEPLOYMENT-RUNBOOK.md` (landed v0.2.0)
+- ✅ `CRYPTOGRAPHER-SIGN-OFF.md` (landed v0.3.0, APPROVED WITH GATES)
+- ✅ `scripts/cut-submission.sh` + `scripts/check-high-assurance.sh`
+  (landed v0.3.0)
+- ⏳ `docs/{evaluation,nist-mptc-category,design-decisions,
   patent-claims,family-architecture,threat-model,
-  ietf-draft-skeleton}.md`
-- `scripts/cut-submission.sh` + supporting build/test/bench/vector
-  generation scripts
+  ietf-draft-skeleton}.md` — supporting docs (parallel to
+  Pulsar's `docs/`; deferred to v0.4 — not required for
+  Tier A documentation shape)
 
-### Phase 5 — Independent cryptographer review (OPEN, BLK-9)
+### Phase 5 — Independent cryptographer review (PARTIAL: internal v0.3.0; external roadmap v0.6.0)
 
-- Same model as Pulsar's `CRYPTOGRAPHER-SIGN-OFF.md`
-- Independent reviewer attests construction + impl + proofs + tests
-- Output: `CRYPTOGRAPHER-SIGN-OFF.md`
+- ✅ **Internal review (v0.3.0)**: `CRYPTOGRAPHER-SIGN-OFF.md`
+  signed off by the internal cryptographer agent. Verdict:
+  APPROVED WITH GATES. Five gates tracked.
+- ⏳ **External engagement (roadmap v0.6.0)**: independent lab
+  audit covering construction + implementation + EC theories (when
+  they land v0.5.0) + dudect (when it lands v0.6.0).
 
 ## Target
 
@@ -129,22 +157,29 @@ Mirror Pulsar's 16-doc structure adapted to Magnetar's specifics:
   submission package to mirror at Phase 4
 - [`luxfi/lps/ROADMAP-CRYPTO-STACK.md`](https://github.com/luxfi/LPs/blob/main/ROADMAP-CRYPTO-STACK.md) — multi-year crypto stack plan
 
-## Honest non-claims (at Tier B)
+## Honest non-claims (at Tier A documentation shape; v0.3.0)
 
-Magnetar v0.2.0 today is NOT:
+Magnetar v0.3.0 today is NOT:
 
-- A NIST MPTC submission (won't be until Tier A, target 2027 Q3)
+- A submitted NIST MPTC entry (the tarball cut tool is in place
+  via `scripts/cut-submission.sh`; cut target is the
+  `submission-2026-11-16` window; Lux internal target is 2027 Q3)
 - A production cryptographic primitive **without** the v0.1
   reveal-and-aggregate trust caveat (aggregator is TCB; see
   `DEPLOYMENT-RUNBOOK.md`)
-- A formally verified scheme (no EasyCrypt / Lean / Jasmin yet)
-- Independently reviewed (no cryptographer sign-off yet)
+- A formally verified scheme **at the threshold overlay layer**
+  (FIPS 205 single-party is NIST-anchored; threshold overlay
+  EC theory shells are roadmap v0.5.0)
+- Externally audited (internal cryptographer sign-off only at
+  v0.3.0; external lab engagement is roadmap v0.6.0)
 - A drop-in replacement for Pulsar (Pulsar M-LWE is the
   production cert-profile target; Magnetar is the cross-family
   diversity leg in the Polaris profile)
 
-This repo now exists as a **production library** for v0.1
-reveal-and-aggregate threshold SLH-DSA, with the honest trust
-caveat documented operationally. The path to Tier A
-(formal verification + independent review + full submission
-package) is on the NIST MPTC v0.3 roadmap.
+This repo now exists as a **production library + Tier A
+documentation shape complete** for v0.1 reveal-and-aggregate
+threshold SLH-DSA, with the honest trust caveat documented
+operationally. The path to **full Tier A** (mechanized refinement
++ dudect + v0.4 lifecycle + external audit) is tracked on the
+v0.4 / v0.5 / v0.6 roadmap, with closure plans documented in
+`CRYPTOGRAPHER-SIGN-OFF.md` Gates section.
