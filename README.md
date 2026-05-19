@@ -1,13 +1,19 @@
 # Magnetar — Threshold SLH-DSA (FIPS 205)
 
-> **Tier B: production library + submission scaffold landed v0.2.0.**
+> **Tier A documentation shape complete at v0.3.0.**
 > Threshold hash-based PQ signature primitive over FIPS 205 SLH-DSA
 > implementing the **v0.1 reveal-and-aggregate** construction.
-> Mechanized refinement + independent audit on the roadmap to Tier A.
+> The full 12-document Tier A submission package shape (mirroring
+> Pulsar's structure) is now in-tree; mechanized refinement, dudect
+> statistical CT validation, v0.4 lifecycle additions (ML-KEM
+> envelope wrap + reshare), and external audit are the remaining
+> gates to full Tier A — see `CRYPTOGRAPHER-SIGN-OFF.md` "Gates"
+> section.
 >
-> See `SPEC.md` for the construction specification,
+> See `SUBMISSION.md` for the NIST MPTC cover sheet,
+> `SPEC.md` for the construction specification,
 > `DEPLOYMENT-RUNBOOK.md` for the v0.1 trust-model disclosure,
-> `BLOCKERS.md` for the remaining Tier B → A path, and
+> `BLOCKERS.md` for the remaining gates to full Tier A, and
 > `SUBMISSION-STATUS.md` for the NIST MPTC roadmap.
 
 ## Status
@@ -18,27 +24,29 @@
 | Construction | v0.1 reveal-and-aggregate (Shamir VSS over the SLH-DSA scheme seed) |
 | Reference implementation | `ref/go/pkg/magnetar/` — pure Go, depends on `cloudflare/circl/sign/slhdsa` |
 | KAT vectors | `vectors/{keygen,sign,verify,threshold-sign,dkg}.json` (deterministic regeneration) |
-| Class-N1-analog claim | threshold signature is byte-equal to single-party `slhdsa.SignDeterministic` on the same reconstructed seed |
-| Submission package | NIST MPTC roadmap — see `SUBMISSION-STATUS.md` for the v0.3 target window |
+| Class-N1 claim | threshold signature is byte-identical to single-party `slhdsa.SignDeterministic` on the same reconstructed seed |
+| Submission package | **Tier A documentation shape complete (v0.3.0)** — `SUBMISSION.md`, `NIST-SUBMISSION.md`, `SPEC.md`, `PATENTS.md`, `PROOF-CLAIMS.md`, `AXIOM-INVENTORY.md`, `FIPS-TRACEABILITY.md`, `TRUSTED-COMPUTING-BASE.md`, `CRYPTOGRAPHER-SIGN-OFF.md`, `DEPLOYMENT-RUNBOOK.md`, `BLOCKERS.md`, `SUBMISSION-STATUS.md`. See `scripts/cut-submission.sh`. |
 | Cert-profile role | Polaris profile in `luxfi/quasar` (cross-family PQ diversity) |
-| Proof artifacts | None yet — see `BLOCKERS.md` BLK-7 |
-| Independent review | None yet — see `BLOCKERS.md` BLK-9 |
+| Proof artifacts | None yet for the threshold overlay — roadmap v0.5.0 (multi-month research). See `AXIOM-INVENTORY.md` §2. |
+| Independent review | Internal cryptographer sign-off at v0.3.0 (`CRYPTOGRAPHER-SIGN-OFF.md`); external audit roadmap v0.6.0. See `BLOCKERS.md` BLK-9. |
 
-## What v0.2.0 ships
+## What v0.3.0 ships (Tier A documentation shape complete)
 
-- **Reference implementation** (`ref/go/pkg/magnetar/`): single-party + DKG + threshold-sign + Combine over the SLH-DSA scheme seed.
+- **Reference implementation** (`ref/go/pkg/magnetar/`, ~2186 LOC): single-party + DKG + threshold-sign + Combine over the SLH-DSA scheme seed.
 - **Parameter sets**: SHAKE-192s (recommended), SHAKE-192f, SHAKE-256s.
 - **KAT generator** (`ref/go/cmd/genkat`): deterministic vectors at five profiles (keygen, sign, verify, threshold-sign, dkg). Re-running on a clean checkout produces byte-identical output.
-- **Headline test** (`n1_byte_equality_test.go`): threshold-produced signatures are byte-identical to single-party FIPS 205 `SignDeterministic` on the reconstructed master seed.
+- **Headline test** (`n1_byte_equality_test.go`): threshold-produced signatures are byte-identical to single-party FIPS 205 `SignDeterministic` on the reconstructed master seed across (3,2), (5,3), (7,4) configurations.
 - **Honest trust-model disclosure**: `DEPLOYMENT-RUNBOOK.md` documents the v0.1 reveal-and-aggregate aggregator-as-TCB caveat with the same rigor as Pulsar's.
+- **Full Tier A documentation shape**: `SUBMISSION.md`, `NIST-SUBMISSION.md`, `PATENTS.md`, `PROOF-CLAIMS.md`, `AXIOM-INVENTORY.md`, `FIPS-TRACEABILITY.md`, `TRUSTED-COMPUTING-BASE.md`, `CRYPTOGRAPHER-SIGN-OFF.md` (mirroring Pulsar's 12-doc structure).
+- **Submission orchestration**: `scripts/cut-submission.sh` + `scripts/check-high-assurance.sh`.
 
-## What v0.2.0 does NOT yet ship
+## What v0.3.0 does NOT yet ship (open gates to full Tier A)
 
-- Formal proofs (EasyCrypt theories, Lean bridges, Jasmin sources) — see `BLOCKERS.md` BLK-7.
-- Constant-time analysis under `dudect` of the threshold layer — see `BLOCKERS.md` BLK-7.
-- ML-KEM-768 wrapping of DKG Round-1 envelopes (closes passive-network-observer channel) — planned for v0.3 / Pulsar parity.
-- Independent cryptographer sign-off — see `BLOCKERS.md` BLK-9.
-- Full 16-document submission package — see `BLOCKERS.md` BLK-8.
+- Formal proofs (EasyCrypt theory shells for the threshold overlay, Lean ↔ EC bridges) — see `BLOCKERS.md` BLK-7 + `CRYPTOGRAPHER-SIGN-OFF.md` GATE-1 / GATE-2. **Roadmap v0.5.0; multi-month research.**
+- Constant-time analysis under `dudect` of the threshold layer — see `CRYPTOGRAPHER-SIGN-OFF.md` GATE-3. **Roadmap v0.6.0.**
+- ML-KEM-768 wrapping of DKG Round-1 envelopes (closes passive-network-observer channel) — see `BLOCKERS.md` BLK-4. **Roadmap v0.4.0.**
+- Reshare protocol (Refresh + ReshareToNewSet) for Class N4-analog evidence — see `BLOCKERS.md` BLK-4. **Roadmap v0.4.0.**
+- External cryptographer audit — see `BLOCKERS.md` BLK-9 + `CRYPTOGRAPHER-SIGN-OFF.md` GATE-4. **Roadmap v0.6.0.**
 
 ## Where this is used
 
