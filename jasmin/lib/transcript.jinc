@@ -1,0 +1,117 @@
+// Magnetar transcript primitives — cSHAKE256 absorption with the
+// Magnetar function-name and customisation tags.
+//
+// This file vends only the absorption side; the squeeze side lives in
+// the caller's response loop because the squeeze length depends on the
+// caller's domain (32 bytes for D_i / tau_1, 96 bytes for seed mix
+// output, etc.).
+
+require "magnetar_params.jinc"
+
+// The cSHAKE256 function-name parameter "Magnetar".
+// Length: 8 ASCII bytes.
+param int MAGNETAR_FNAME_LEN = 8;
+
+// The customisation tags — ASCII byte arrays inlined at use sites.
+//   "MAGNETAR-SIGN-R1-V1"      (19 bytes)
+//   "MAGNETAR-SIGN-MASK-V1"    (21 bytes)
+//   "MAGNETAR-SEED-SHARE-V1"   (22 bytes)
+//   "MAGNETAR-DKG-COMMIT-V1"   (22 bytes)
+//   "MAGNETAR-DKG-TRANSCRIPT-V1" (26 bytes)
+
+param int MAGNETAR_TAG_R1_LEN          = 19;
+param int MAGNETAR_TAG_MASK_LEN        = 21;
+param int MAGNETAR_TAG_SEED_LEN        = 22;
+param int MAGNETAR_TAG_DKG_COMMIT_LEN  = 22;
+param int MAGNETAR_TAG_DKG_TRANS_LEN   = 26;
+
+// cSHAKE256 state: 25 64-bit lanes (1600 bits, 200 bytes).
+// Each call carries an explicit offset within the rate (136 bytes for
+// SHAKE256) so absorption can span multiple calls without re-keying.
+
+// Absorb the cSHAKE256 prelude for the MAGNETAR-SIGN-R1-V1 tag.
+// Returns the (state, offset) tuple ready for caller-side payload
+// absorption.
+inline
+fn cshake256_absorb_prelude_R1(
+    reg ptr u64[25] state)
+    -> reg ptr u64[25], reg u64
+{
+    reg u64 offset;
+    // Function name N = "Magnetar" + tag S = "MAGNETAR-SIGN-R1-V1"
+    // serialized per SP 800-185 §3:
+    //   bytepad(left_encode(8) || N || left_encode(19) || S, 136)
+    //
+    // The serialized prelude is constant; we inline it as a byte array
+    // in the caller's stack and absorb in a fixed-size loop.
+
+    // Initial state is zero.
+    state[0] = 0; state[1] = 0; state[2] = 0; state[3] = 0; state[4] = 0;
+    state[5] = 0; state[6] = 0; state[7] = 0; state[8] = 0; state[9] = 0;
+    state[10] = 0; state[11] = 0; state[12] = 0; state[13] = 0; state[14] = 0;
+    state[15] = 0; state[16] = 0; state[17] = 0; state[18] = 0; state[19] = 0;
+    state[20] = 0; state[21] = 0; state[22] = 0; state[23] = 0; state[24] = 0;
+
+    // The prelude byte length is bytepad(...) length — exactly 136
+    // bytes for the SHAKE256 rate.
+    // We absorb the 136-byte bytepad prelude into lanes [0..16] and
+    // reset offset to 0 for the next phase.
+    //
+    // CAVEAT: this stub absorbs a placeholder all-zero prelude. The
+    // full SP 800-185 serializer is the closure of this routine;
+    // tracked in the README "Status — initial track".
+    offset = 0;
+    return state, offset;
+}
+
+// Absorb one byte into the cSHAKE256 state at the current offset.
+// When offset hits 136 (SHAKE256 rate), apply keccak-f permutation.
+inline
+fn absorb_one_byte(
+    reg ptr u64[25] state,
+    reg u64 offset,
+    reg u8 byte)
+    -> reg ptr u64[25], reg u64
+{
+    reg u64 lane_idx, byte_pos;
+    reg u64 byte_u64;
+    reg u64 lane_val;
+    reg u64 shifted;
+
+    lane_idx = offset;
+    lane_idx >>= 3;
+    byte_pos = offset;
+    byte_pos &= 7;
+
+    // Shift byte into the right lane position.
+    byte_u64 = (64u) byte;
+    byte_pos <<= 3;
+    byte_u64 <<= (byte_pos & 63);   // CT shift; byte_pos in [0, 64)
+
+    // XOR into the lane.
+    lane_val = state[lane_idx];
+    lane_val ^= byte_u64;
+    state[lane_idx] = lane_val;
+
+    offset += 1;
+    if (offset >= 136) {
+        // Apply keccak-f. Placeholder: real impl calls _keccak_f1600
+        // from libjade-equivalent or in-house.
+        offset = 0;
+    }
+    return state, offset;
+}
+
+// Finalize the cSHAKE256 absorption.
+//
+// CAVEAT: stub. Full impl appends the cSHAKE domain-separation byte
+// 0x04 and applies keccak-f.
+inline
+fn cshake256_finalize(
+    reg ptr u64[25] state,
+    reg u64 offset)
+    -> reg ptr u64[25]
+{
+    // Placeholder finalize step.
+    return state;
+}

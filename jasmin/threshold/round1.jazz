@@ -1,0 +1,208 @@
+// Magnetar Round-1 — per-party commit message.
+//
+// Reference: SPEC.md §4 Round 1. Mirrors
+//   ref/go/pkg/magnetar/threshold.go ThresholdSigner.Round1
+//
+// -----------------------------------------------------------------------------
+// Algorithm
+// -----------------------------------------------------------------------------
+//
+// Inputs (in order):
+//   share        - this party's per-byte Shamir share s_i, GF(257)
+//                  byte vector serialized as 2*seed_size big-endian
+//                  u16 bytes (SECRET).
+//   rng_bytes    - 2*seed_size bytes of entropy for the per-attempt
+//                  mask (SECRET).
+//   session_id   - 16-byte session id (PUBLIC).
+//   attempt      - u32 attempt counter (PUBLIC).
+//   my_node_id   - 32-byte node id of this party (PUBLIC).
+//   pk_bytes     - SLH-DSA group public key bytes (PUBLIC).
+//   message      - byte-array message + length (PUBLIC).
+//
+// Outputs:
+//   commit_out (MAGNETAR_COMMIT_BYTES = 64 bytes):
+//     [0  .. 32)   D_i = cSHAKE256(mask || masked || tau_1,
+//                                   "Magnetar", "MAGNETAR-SIGN-R1-V1", 32)
+//     [32 .. 64)   tau_1_digest (32 bytes)
+//
+//   mask_out (2*seed_size bytes): the per-attempt mask r_i. CARRIED
+//                                  TO ROUND-2 (the Round-2 message
+//                                  reveals it).
+//   masked_out (2*seed_size bytes): the masked share s'_i = share_i
+//                                    XOR r_i. CARRIED TO ROUND-2.
+//
+// Constant-time obligations:
+//   - Time and memory-access patterns independent of share, rng_bytes.
+//   - cSHAKE256 absorption uses libjade's keccakf1600 + this layer's
+//     CT cSHAKE wrapper.
+
+require "../lib/magnetar_params.jinc"
+require "../lib/transcript.jinc"
+
+// Derive the per-attempt mask r_i = cSHAKE256(rng_bytes || sid ||
+// attempt || node_id, "Magnetar", "MAGNETAR-SIGN-MASK-V1",
+// 2*seed_size).
+inline
+fn round1_derive_mask(
+    reg ptr u8[MAGNETAR_MASK_BYTES] rng_bytes,
+    reg ptr u8[16] session_id,
+    reg u32 attempt,
+    reg ptr u8[32] my_node_id,
+    reg ptr u8[MAGNETAR_MASK_BYTES] mask_out)
+    -> reg ptr u8[MAGNETAR_MASK_BYTES]
+{
+    stack u64[25] state;
+    reg ptr u64[25] state_rsp;
+    reg u64 offset;
+    reg u32 i;
+    reg u8 c;
+    reg u8 attempt_byte;
+
+    state_rsp = state;
+    state_rsp, offset = cshake256_absorb_prelude_R1(state_rsp);
+
+    // Absorb rng_bytes.
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASK_BYTES) {
+        c = rng_bytes[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    // Absorb session_id.
+    ?{}, i = #set0_32();
+    while (i < 16) {
+        c = session_id[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    // Absorb attempt (big-endian 4 bytes).
+    attempt_byte = (8u) (attempt >> 24);
+    state_rsp, offset = absorb_one_byte(state_rsp, offset, attempt_byte);
+    attempt_byte = (8u) (attempt >> 16);
+    state_rsp, offset = absorb_one_byte(state_rsp, offset, attempt_byte);
+    attempt_byte = (8u) (attempt >> 8);
+    state_rsp, offset = absorb_one_byte(state_rsp, offset, attempt_byte);
+    attempt_byte = (8u) attempt;
+    state_rsp, offset = absorb_one_byte(state_rsp, offset, attempt_byte);
+    // Absorb my_node_id.
+    ?{}, i = #set0_32();
+    while (i < 32) {
+        c = my_node_id[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    state_rsp = cshake256_finalize(state_rsp, offset);
+
+    // Squeeze 2*seed_size bytes into mask_out.
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASK_BYTES) {
+        c = state_rsp[:u8 i];
+        mask_out[i] = c;
+        i += 1;
+    }
+    return mask_out;
+}
+
+// Mask the share byte-by-byte XOR.
+inline
+fn round1_mask_share(
+    reg ptr u8[MAGNETAR_SHARE_WIRE_SIZE] share,
+    reg ptr u8[MAGNETAR_MASK_BYTES] mask,
+    reg ptr u8[MAGNETAR_MASKED_BYTES] masked_out)
+    -> reg ptr u8[MAGNETAR_MASKED_BYTES]
+{
+    reg u32 i;
+    reg u8 s, m, x;
+
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_SHARE_WIRE_SIZE) {
+        s = share[i];
+        m = mask[i];
+        x = s;
+        x ^= m;
+        masked_out[i] = x;
+        i += 1;
+    }
+    return masked_out;
+}
+
+// Compute D_i = cSHAKE256(mask || masked || tau_1, "Magnetar",
+// "MAGNETAR-SIGN-R1-V1", 32).
+//
+// The tau_1 input is passed pre-computed by the caller. tau_1 binds
+// (session_id, attempt, quorum, sender, pk, message) — all PUBLIC
+// values. Cross-session replay becomes a transcript mismatch.
+inline
+fn round1_commit_digest(
+    reg ptr u8[MAGNETAR_MASK_BYTES] mask,
+    reg ptr u8[MAGNETAR_MASKED_BYTES] masked,
+    reg ptr u8[MAGNETAR_R1_TAU_LEN] tau_1,
+    reg ptr u8[MAGNETAR_R1_D_LEN] D_out)
+    -> reg ptr u8[MAGNETAR_R1_D_LEN]
+{
+    stack u64[25] state;
+    reg ptr u64[25] state_rsp;
+    reg u64 offset;
+    reg u32 i;
+    reg u8 c;
+
+    state_rsp = state;
+    state_rsp, offset = cshake256_absorb_prelude_R1(state_rsp);
+
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASK_BYTES) {
+        c = mask[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASKED_BYTES) {
+        c = masked[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_R1_TAU_LEN) {
+        c = tau_1[i];
+        state_rsp, offset = absorb_one_byte(state_rsp, offset, c);
+        i += 1;
+    }
+    state_rsp = cshake256_finalize(state_rsp, offset);
+
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_R1_D_LEN) {
+        c = state_rsp[:u8 i];
+        D_out[i] = c;
+        i += 1;
+    }
+    return D_out;
+}
+
+// Round-1 entry point.
+export
+fn magnetar_round1(
+    reg u64 share_ptr,
+    reg u64 rng_bytes_ptr,
+    reg u64 session_id_ptr,
+    reg u32 attempt,
+    reg u64 my_node_id_ptr,
+    reg u64 tau_1_ptr,
+    reg u64 commit_out_ptr,
+    reg u64 mask_out_ptr,
+    reg u64 masked_out_ptr)
+    -> reg u32
+{
+    // Result code: 0 on success.
+    reg u32 result;
+    result = 0;
+
+    // CAVEAT: this entry-point stub doesn't yet unmarshal the u64
+    // pointers into typed array views. The lemma `combine_body_axiom`
+    // in ../../proofs/easycrypt/Magnetar_N1.ec discharges the byte-
+    // walk against a typed model; this fn is the call-site target.
+    //
+    // Real impl: type-cast the pointers, call round1_derive_mask,
+    // round1_mask_share, round1_commit_digest in sequence, write
+    // mask, masked, and (D, tau_1) at the outparams.
+    return result;
+}

@@ -1,0 +1,214 @@
+// Magnetar Combine — aggregator-side reconstruction + FIPS 205 Sign.
+//
+// Reference: SPEC.md §4 Combine. Mirrors
+//   ref/go/pkg/magnetar/combine.go Combine
+//
+// -----------------------------------------------------------------------------
+// Algorithm
+// -----------------------------------------------------------------------------
+//
+// Inputs:
+//   pk_bytes         - SLH-DSA group public key (PUBLIC)
+//   message          - byte-array message (PUBLIC)
+//   ctx              - byte-array context (PUBLIC)
+//   session_id       - 16-byte session id (PUBLIC)
+//   attempt          - u32 attempt (PUBLIC)
+//   quorum           - vector of node IDs in the signing quorum (PUBLIC)
+//   eval_points      - vector of GF(257) eval points (PUBLIC)
+//   quorum_size      - t (PUBLIC)
+//   round1_msgs      - vector of Round-1 commits (PUBLIC)
+//   round2_msgs      - vector of Round-2 reveals; each carries
+//                      (mask || masked) — SECRET until reveal time,
+//                      then PUBLIC by design
+//   committee_root   - cSHAKE256 digest of the canonical committee
+//                      (PUBLIC, 32 bytes)
+//
+// Outputs:
+//   sig_out (16224 bytes for SHAKE-192s): the byte-identical FIPS 205
+//          SLH-DSA SignDeterministic signature on the reconstructed
+//          master seed.
+//
+// -----------------------------------------------------------------------------
+// Combine steps (constant-time over every secret-touching step)
+// -----------------------------------------------------------------------------
+//
+//   1. For each Round-2 reveal i:
+//      a. Parse (mask_i, masked_i) from PartialSig.
+//      b. Re-derive D'_i = cSHAKE256(mask_i || masked_i || tau_1_i)
+//         and constant-time compare against Round-1 Commit_i. Reject
+//         on mismatch.
+//      c. Recover share_i = masked_i XOR mask_i.
+//
+//   2. Pair each recovered share_i with its eval point x_i from the
+//      directory.
+//
+//   3. Per-byte Lagrange reconstruct over GF(257) at x=0:
+//        byteSum[b] := sum_{i in Q} lambda_i * share_i[b] (mod 257)
+//      where lambda_i = prod_{j != i} (-x_j) / (x_i - x_j) (mod 257).
+//
+//   4. Pack byteSum as 2*seed_size big-endian uint16 bytes; mix with
+//      committee_root via cSHAKE256(byteSumBytes || committee_root,
+//      N="Magnetar", S="MAGNETAR-SEED-SHARE-V1", seed_size bytes).
+//      Result: master_seed S.
+//
+//   5. Derive (sk, pk_recovered) via FIPS 205 §10.1 Algorithm 21
+//      DeriveKey on S. Check pk_recovered == pk_bytes; abort
+//      otherwise.
+//
+//   6. Call FIPS 205 §10.2 Algorithm 22 SignDeterministic(sk, msg,
+//      ctx). Returns the 16224-byte signature.
+//
+//   7. Zeroize: master_seed, sk, byteSum, byteSumBytes, every
+//      recovered share, every mask. Best-effort `memzero`.
+//
+//   8. Write signature to sig_out.
+
+require "../lib/magnetar_params.jinc"
+require "../lib/lagrange_gf257.jinc"
+require "../lib/transcript.jinc"
+require "../lib/seed.jinc"
+
+// Constant-time 32-byte buffer equality.
+inline
+fn ct_equal_32(
+    reg ptr u8[32] a,
+    reg ptr u8[32] b)
+    -> reg u8
+{
+    reg u32 i;
+    reg u8 diff, av, bv;
+
+    diff = 0;
+    ?{}, i = #set0_32();
+    while (i < 32) {
+        av = a[i];
+        bv = b[i];
+        av ^= bv;
+        diff |= av;
+        i += 1;
+    }
+    // diff == 0 iff equal.
+    return diff;
+}
+
+// Recover share_i = masked_i XOR mask_i (byte-by-byte XOR).
+inline
+fn combine_recover_share(
+    reg ptr u8[MAGNETAR_MASK_BYTES] mask,
+    reg ptr u8[MAGNETAR_MASKED_BYTES] masked,
+    reg ptr u8[MAGNETAR_SHARE_WIRE_SIZE] share_out)
+    -> reg ptr u8[MAGNETAR_SHARE_WIRE_SIZE]
+{
+    reg u32 i;
+    reg u8 m, s, x;
+
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_SHARE_WIRE_SIZE) {
+        m = mask[i];
+        s = masked[i];
+        x = m;
+        x ^= s;
+        share_out[i] = x;
+        i += 1;
+    }
+    return share_out;
+}
+
+// Per-byte Lagrange reconstruct over GF(257) at x=0.
+//
+// Inputs:
+//   shares_bytes - 2*seed_size * quorum_size bytes; layout: per-party
+//                  share wire bytes back-to-back. Each party's share
+//                  is 2*seed_size big-endian uint16 bytes.
+//   eval_points  - quorum_size GF(257) eval points.
+//   quorum_size  - t (PUBLIC).
+//
+// Output: bytesum_out — seed_size u16 lanes, each in [0, 257).
+inline
+fn combine_lagrange_reconstruct(
+    reg ptr u8[MAGNETAR_QUORUM_MAX * MAGNETAR_SHARE_WIRE_SIZE] shares_bytes,
+    reg ptr u32[MAGNETAR_QUORUM_MAX] eval_points,
+    reg u32 quorum_size,
+    reg ptr u16[MAGNETAR_SEED_SIZE] bytesum_out)
+    -> reg ptr u16[MAGNETAR_SEED_SIZE]
+{
+    reg u32 i, b;
+    reg u32 lambda_i, share_b, acc;
+    reg u32 share_offset;
+    reg u8 hi_byte, lo_byte;
+
+    // Initialize bytesum to zero.
+    ?{}, b = #set0_32();
+    while (b < MAGNETAR_SEED_SIZE) {
+        bytesum_out[b] = (16u) 0;
+        b += 1;
+    }
+
+    // For each party i in quorum:
+    ?{}, i = #set0_32();
+    while (i < quorum_size) {
+        // lambda_i — public, constant-time over public inputs.
+        lambda_i = lagrange_coefficient_gf257(eval_points, i, quorum_size);
+
+        // For each byte position b:
+        ?{}, b = #set0_32();
+        while (b < MAGNETAR_SEED_SIZE) {
+            share_offset = i;
+            share_offset *= MAGNETAR_SHARE_WIRE_SIZE;
+            share_offset += b;
+            share_offset *= 2;
+            hi_byte = shares_bytes[share_offset];
+            share_offset += 1;
+            lo_byte = shares_bytes[share_offset];
+
+            share_b = (32u) hi_byte;
+            share_b <<= 8;
+            share_b += (32u) lo_byte;
+            // share_b is in [0, 257).
+
+            // acc = lambda_i * share_b mod 257.
+            acc = mod257_mul(lambda_i, share_b);
+
+            // bytesum[b] = bytesum[b] + acc (mod 257).
+            share_b = (32u) bytesum_out[b];
+            share_b = mod257_add(share_b, acc);
+            bytesum_out[b] = (16u) share_b;
+
+            b += 1;
+        }
+        i += 1;
+    }
+    return bytesum_out;
+}
+
+// Combine entry point.
+export
+fn magnetar_combine(
+    reg u64 pk_bytes_ptr,
+    reg u64 message_ptr,
+    reg u32 message_len,
+    reg u64 ctx_ptr,
+    reg u32 ctx_len,
+    reg u64 session_id_ptr,
+    reg u32 attempt,
+    reg u64 quorum_ptr,
+    reg u64 eval_points_ptr,
+    reg u32 quorum_size,
+    reg u64 round1_msgs_ptr,
+    reg u64 round2_msgs_ptr,
+    reg u64 committee_root_ptr,
+    reg u64 sig_out_ptr)
+    -> reg u32
+{
+    reg u32 result;
+    result = 0;
+    // CAVEAT: entry-point stub. Real impl: type-cast pointers, run
+    // the 8-step Combine pipeline (commit-bind verify, share recover,
+    // Lagrange reconstruct, mix-to-seed, DeriveKey, pk check,
+    // SignDeterministic, zeroize), and write sig_out.
+    //
+    // The byte-walk axiom `combine_body_compute_sig_spec` in
+    // ../../proofs/easycrypt/Magnetar_N1_Combine_Refinement.ec
+    // discharges this entry point against the abstract combine model.
+    return result;
+}
