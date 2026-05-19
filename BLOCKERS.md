@@ -1,13 +1,19 @@
 # Magnetar — Blockers to NIST MPTC submission
 
-> Honest enumeration of what blocks Magnetar from moving Tier B →
-> Tier A on the submission-readiness ladder.
+> Honest enumeration of what blocks Magnetar from moving toward
+> **full Tier A** (Pulsar-equivalent) on the submission-readiness
+> ladder.
 >
-> **As of v0.2.0**: Tier C → Tier B blockers (BLK-1, BLK-2, BLK-3)
-> are **CLOSED**. Tier B → A blockers (BLK-4 through BLK-9) are
-> partially or fully open; see status below. See `SPEC.md` for the
-> selected construction, `SUBMISSION-STATUS.md` for tier definitions
-> and the phased plan.
+> **As of v0.3.0**: Tier C → Tier B blockers (BLK-1, BLK-2, BLK-3)
+> are **CLOSED** at v0.2.0. BLK-5 (KAT vectors), BLK-8 (submission
+> package documentation shape) are **CLOSED** at v0.3.0. BLK-4
+> (reference impl + v0.4 lifecycle additions), BLK-6 (cross-validation
+> harness), BLK-7 (proof artifacts), BLK-9 (independent
+> cryptographer review) are partially or fully open; see status
+> below. See `SPEC.md` for the selected construction,
+> `SUBMISSION-STATUS.md` for tier definitions and the phased plan,
+> `CRYPTOGRAPHER-SIGN-OFF.md` Gates section for the full Tier A
+> gate inventory.
 
 ## Tier C → Tier B blockers (construction-level) — CLOSED v0.2.0
 
@@ -121,27 +127,58 @@ slhdsa.Verify — see `n1_byte_equality_test.go`.
 Multi-month research. Tier A submission depends on at least the
 EasyCrypt correctness theorem.
 
-### BLK-8 — Submission package documentation → **OPEN (depends on BLK-7)**
+### BLK-8 — Submission package documentation → **CLOSED v0.3.0 (documentation shape; supporting docs/* deferred)**
 
-**Status**: `SPEC.md` + `DEPLOYMENT-RUNBOOK.md` + `BLOCKERS.md` +
-`SUBMISSION-STATUS.md` ship in v0.2.0. The remaining 12 documents
-in the Pulsar template (NIST-SUBMISSION.md, PATENTS.md,
-PROOF-CLAIMS.md, AXIOM-INVENTORY.md, FIPS-TRACEABILITY.md,
-TRUSTED-COMPUTING-BASE.md, CHANGELOG.md, docs/* mirror) are
-deferred to the Tier A submission package. Several depend on
-BLK-7 outputs.
+**Resolution at v0.3.0**: the full 12-document Tier A submission
+package shape mirroring Pulsar's structure now ships:
 
-### BLK-9 — Independent cryptographer review → **OPEN**
+- ✅ `SUBMISSION.md` (cover sheet)
+- ✅ `NIST-SUBMISSION.md` (one-page executive summary)
+- ✅ `SPEC.md` (from v0.2.0)
+- ✅ `PATENTS.md` (royalty-free grant + defensive termination)
+- ✅ `PROOF-CLAIMS.md` (HONEST framing — narrow claim + 7 explicit non-claims)
+- ✅ `AXIOM-INVENTORY.md` (construction-level + implementation-level axioms with closure plans)
+- ✅ `FIPS-TRACEABILITY.md` (FIPS 205 § → code mapping)
+- ✅ `TRUSTED-COMPUTING-BASE.md` (TCB inventory)
+- ✅ `CRYPTOGRAPHER-SIGN-OFF.md` (internal review — APPROVED WITH GATES)
+- ✅ `CHANGELOG.md` (v0.3.0 entry)
+- ✅ `DEPLOYMENT-RUNBOOK.md` (from v0.2.0)
+- ✅ `BLOCKERS.md` (this file, v0.3.0 update)
+- ✅ `SUBMISSION-STATUS.md` (v0.3.0 update — Tier A doc shape complete)
 
-**Status**: no independent review of v0.2.0 has occurred.
+**What remains deferred to v0.4** (supporting docs/* — not
+required for Tier A documentation shape):
 
-**What's needed**: same model as Pulsar's
-`CRYPTOGRAPHER-SIGN-OFF.md` — independent reviewer attests
-construction + impl + proofs + tests. Output:
-`CRYPTOGRAPHER-SIGN-OFF.md` matching Pulsar's structure.
+- `docs/evaluation.md` — performance + correctness + KAT
+  cross-validation evidence
+- `docs/ietf-draft-skeleton.md` — IETF draft skeleton
+- `docs/nist-mptc-category.md` — Class N1 + N4-analog mapping
+- `docs/patent-claims.md` — attorney-prep claim drafts
+- `docs/design-decisions.md`, `docs/family-architecture.md`,
+  `docs/threat-model.md` — supporting design context
 
-Blocked on BLK-7 and BLK-8 being complete enough for the reviewer
-to evaluate the formal correctness + the submission package.
+These are tracked for the v0.4 release alongside ML-KEM envelope
+wrapping + reshare protocol.
+
+### BLK-9 — Independent cryptographer review → **PARTIAL: internal v0.3.0, external roadmap v0.6.0**
+
+**Resolution at v0.3.0 (internal)**: `CRYPTOGRAPHER-SIGN-OFF.md`
+landed. Internal cryptographer agent reviewed all 12 production
+Go source files (~2186 LOC) plus the test surface (~1451 LOC),
+verified build + vet + tests + coverage (76.8%), conducted real
+file:line citation of constant-time discipline + zeroize
+discipline + identifiable abort soundness. Verdict: **APPROVED
+WITH GATES**. Five open gates tracked (GATE-1 through GATE-5).
+
+**What remains (external, roadmap v0.6.0)**: independent lab
+engagement covering construction + implementation + EC theories
+(when they land v0.5.0) + dudect (when it lands v0.6.0). Output:
+external audit report alongside the internal sign-off.
+
+External engagement is blocked on:
+- GATE-1 / GATE-2 (EC theory shells + Lean ↔ EC bridge, v0.5.0)
+- GATE-3 (dudect 10⁹ samples, v0.6.0)
+- GATE-5 (v0.4 lifecycle additions for the deployment posture)
 
 ## Non-blockers
 

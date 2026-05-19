@@ -7,3 +7,10 @@ vectors-tmp/
 .DS_Store
 *.swp
 *~
+
+# EC theory shells (work-in-progress; targeted for v0.5.0 commit).
+# At v0.3.0 PROOF-CLAIMS.md §3.1 explicitly states "no EC theories
+# ship at v0.3.0" — keeping these out of the working-tree-clean
+# check until they reach the admit-budget closure stage Pulsar
+# v1.0.7 holds (admit 0/0 across 13 EC files).
+proofs/
