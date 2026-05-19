@@ -1,0 +1,84 @@
+// Magnetar threshold-layer parameters.
+//
+// The single-party SLH-DSA constants are tracked at:
+//   - FIPS 205 §10.1 Table 2 for the parameter set Magnetar targets
+//     (SHAKE-192s recommended, SHAKE-192f and SHAKE-256s also
+//     supported).
+//
+// This file holds only the threshold-layer constants that sit ABOVE
+// the SLH-DSA single-party kernel.
+
+// ---------------------------------------------------------------------------
+// Shamir layer (GF(257), byte-wise)
+// ---------------------------------------------------------------------------
+
+// The Shamir prime — smallest prime > 255 so every byte fits as a
+// distinct field element. Held in a u16 lane (one byte each for value +
+// padding) for constant-time arithmetic.
+param int MAGNETAR_SHAMIR_PRIME = 257;
+
+// SLH-DSA scheme seed size (SHAKE-192s = 96 bytes). Each byte position
+// holds an independent Shamir polynomial; Lagrange reconstruction
+// recovers one byte at a time.
+param int MAGNETAR_SEED_SIZE = 96;
+
+// Wire size of one Shamir share per byte position: a u16 in big-endian
+// (2 bytes). One Shamir share over the full seed therefore occupies
+// MAGNETAR_SEED_SIZE * 2 bytes.
+param int MAGNETAR_SHARE_WIRE_SIZE = MAGNETAR_SEED_SIZE * 2;
+
+// ---------------------------------------------------------------------------
+// Threshold sizing
+// ---------------------------------------------------------------------------
+
+// Maximum quorum size (signing committee). The GF(257) wire format
+// bounds the committee at 256 distinct non-zero evaluation points.
+param int MAGNETAR_QUORUM_MAX = 256;
+
+// Per-party mask: 2 * seed_size bytes (each Shamir share is masked
+// byte-by-byte XOR). One mask per party fills the Round-1 commit input.
+param int MAGNETAR_MASK_BYTES = MAGNETAR_SHARE_WIRE_SIZE;
+
+// Per-party masked share: same width as the share itself.
+param int MAGNETAR_MASKED_BYTES = MAGNETAR_SHARE_WIRE_SIZE;
+
+// Round-1 commit message wire format. Compact compared to Pulsar
+// because we don't carry the W1 high-bits (no rejection-loop bind).
+//
+//   [0  .. 32)     D_i = cSHAKE256(mask || masked || tau_1)
+//   [32 .. 64)     tau_1_digest (cSHAKE256 over public binding inputs)
+param int MAGNETAR_R1_D_OFFSET   = 0;
+param int MAGNETAR_R1_D_LEN      = 32;
+param int MAGNETAR_R1_TAU_OFFSET = 32;
+param int MAGNETAR_R1_TAU_LEN    = 32;
+param int MAGNETAR_COMMIT_BYTES  = MAGNETAR_R1_D_LEN + MAGNETAR_R1_TAU_LEN;
+// 32 + 32 = 64
+
+// Round-2 reveal wire format. Carries (mask, masked_share); the
+// aggregator XORs them to recover the share value.
+//
+//   [0   .. seed_size*2)     mask r_i
+//   [seed_size*2 .. seed_size*4)   masked_share s'_i = share_i XOR mask
+param int MAGNETAR_R2_MASK_OFFSET   = 0;
+param int MAGNETAR_R2_MASK_LEN      = MAGNETAR_MASK_BYTES;
+param int MAGNETAR_R2_MASKED_OFFSET = MAGNETAR_R2_MASK_LEN;
+param int MAGNETAR_R2_MASKED_LEN    = MAGNETAR_MASKED_BYTES;
+param int MAGNETAR_RESPONSE_BYTES   = MAGNETAR_R2_MASK_LEN + MAGNETAR_R2_MASKED_LEN;
+// 192 + 192 = 384
+
+// ---------------------------------------------------------------------------
+// Transcript / MAC domain separation tags
+// ---------------------------------------------------------------------------
+//
+// Magnetar's transcript layer (ref/go/pkg/magnetar/transcript.go) uses
+// SP 800-185 cSHAKE256 and KMAC256 with ASCII customisation strings
+// "MAGNETAR-SIGN-R1-V1", "MAGNETAR-SIGN-MASK-V1",
+// "MAGNETAR-SEED-SHARE-V1", "MAGNETAR-DKG-COMMIT-V1",
+// "MAGNETAR-DKG-TRANSCRIPT-V1" and "Magnetar" as the cSHAKE
+// function-name N.
+//
+// Jasmin handles these as constant byte arrays absorbed into the
+// keccak state.
+
+// Committee root digest length.
+param int MAGNETAR_COMMITTEE_ROOT_LEN = 32;

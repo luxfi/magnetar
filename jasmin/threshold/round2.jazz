@@ -1,0 +1,77 @@
+// Magnetar Round-2 — per-party reveal message.
+//
+// Reference: SPEC.md §4 Round 2. Mirrors
+//   ref/go/pkg/magnetar/threshold.go ThresholdSigner.Round2
+//
+// -----------------------------------------------------------------------------
+// Algorithm
+// -----------------------------------------------------------------------------
+//
+// Inputs (in order):
+//   mask         - this party's mask r_i from Round-1 (SECRET — but
+//                  about to be REVEALED at Round-2). Layout:
+//                  2*seed_size bytes (kept in caller state across
+//                  rounds).
+//   masked       - the masked share s'_i = share_i XOR r_i (SECRET —
+//                  about to be REVEALED). Same layout.
+//   round1_msgs  - vector of Round-1 commits from the quorum
+//                  (PUBLIC).
+//   quorum_size  - t (PUBLIC).
+//   session_id   - 16-byte session id (PUBLIC).
+//   attempt      - u32 attempt counter (PUBLIC).
+//
+// Outputs:
+//   reveal_out (MAGNETAR_RESPONSE_BYTES = 384 bytes):
+//     [0   .. 2*seed_size)              mask r_i
+//     [2*seed_size .. 4*seed_size)      masked_share s'_i
+//
+// Constant-time obligations:
+//   - Time and memory-access patterns independent of mask, masked.
+//     Round-2 IS the reveal step; secrecy of mask/masked ends here.
+//   - The session/attempt consistency check is over PUBLIC inputs.
+
+require "../lib/magnetar_params.jinc"
+require "../lib/transcript.jinc"
+
+// Concatenate (mask || masked) into the reveal_out buffer.
+inline
+fn round2_pack_reveal(
+    reg ptr u8[MAGNETAR_MASK_BYTES] mask,
+    reg ptr u8[MAGNETAR_MASKED_BYTES] masked,
+    reg ptr u8[MAGNETAR_RESPONSE_BYTES] reveal_out)
+    -> reg ptr u8[MAGNETAR_RESPONSE_BYTES]
+{
+    reg u32 i;
+    reg u8 c;
+
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASK_BYTES) {
+        c = mask[i];
+        reveal_out[(int)(MAGNETAR_R2_MASK_OFFSET + i)] = c;
+        i += 1;
+    }
+    ?{}, i = #set0_32();
+    while (i < MAGNETAR_MASKED_BYTES) {
+        c = masked[i];
+        reveal_out[(int)(MAGNETAR_R2_MASKED_OFFSET + i)] = c;
+        i += 1;
+    }
+    return reveal_out;
+}
+
+// Round-2 entry point.
+export
+fn magnetar_round2(
+    reg u64 mask_ptr,
+    reg u64 masked_ptr,
+    reg u64 session_id_ptr,
+    reg u32 attempt,
+    reg u64 reveal_out_ptr)
+    -> reg u32
+{
+    reg u32 result;
+    result = 0;
+    // CAVEAT: entry-point stub. Real impl: type-cast pointers, call
+    // round2_pack_reveal, write reveal_out.
+    return result;
+}
