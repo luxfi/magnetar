@@ -3,7 +3,7 @@
 > **Research-stage construction.** Threshold hash-based PQ signature
 > primitive over FIPS 205 SLH-DSA. Not production-ready. Not part of
 > any current NIST submission. See `DESIGN.md` for the research
-> direction and `BLOCKERS.md` for the path to production.
+> direction and `SUBMISSION-STATUS.md` for the path to NIST MPTC v0.3.
 
 ## Status
 
