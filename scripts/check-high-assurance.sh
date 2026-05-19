@@ -1,92 +1,77 @@
 #!/usr/bin/env bash
 # Magnetar high-assurance gate — orchestrator (per-push, REAL checks).
 #
-# HONESTY NOTE: Magnetar's high-assurance surface is structurally
-# lighter than Pulsar's. Pulsar runs 7 per-push checks (jasminc +
-# jasmin-ct + ec-admits + ec-regressions + ec-refinement-scaffold +
-# lean-bridge + ec-extraction + ec-compile). Magnetar has NO
-# EasyCrypt theories for the threshold overlay, NO Lean ↔ EC bridge
-# specific to Magnetar (the algebra is identical to Pulsar's
-# GF(257); cross-citation is the closure plan), NO Jasmin sources —
-# see PROOF-CLAIMS.md §3.1 for the honest framing of why.
+# At v0.4.0 Magnetar has full Tier A proof artifacts: EC theories,
+# Lean bridges, Jasmin sources, dudect harness — mirroring Pulsar's
+# Tier A reference at admit 0/0.
 #
-# What this gate runs at this submission revision (v0.3.0):
+# Each check below lives in its own script under scripts/checks/ (or
+# scripts/, for the cross-prover Lean↔EC bridge guard). This file
+# is intentionally THIN: it sequences the checks and propagates
+# their exit codes. Each per-check script is independently runnable.
 #
-#   1. go build ./...
-#   2. go vet ./...
-#   3. constant-time grep guard (warn on accidental fmt.Printf /
-#      log.Println on secret-touching paths)
-#   4. unit test smoke (short mode for speed; full suite runs in
-#      cut-submission.sh step 5)
+# The checks, in order:
 #
-# What this gate DOES NOT run (because the artifacts do not exist
-# at v0.3.0):
+#   1. jasmin.sh                  — jasminc type-check + jasmin-ct
+#                                   on the threshold layer (blocking).
+#   2. ec-admits.sh               — EasyCrypt admit-budget (0/0 today).
+#   3. ec-regressions.sh          — Retired-axiom-shape regression
+#                                   guards.
+#   4. ec-refinement-scaffold.sh  — declare-axiom hygiene in the
+#                                   Refinement files.
+#   5. check-lean-bridge.sh       — Lean↔EC Shamir bridge guard
+#                                   (cross-cited from Pulsar).
+#   6. extraction.sh              — Jasmin → EC extraction sanity.
+#   7. ec-compile.sh              — All EC files compile clean.
+#   8. go-tests.sh                — Core Go unit tests (short mode).
 #
-#   - EasyCrypt compile / admit-budget / regression checks for the
-#     threshold overlay (roadmap v0.5.0; Pulsar Tier A reference)
-#   - Lean ↔ EC bridge verification (roadmap v0.5.0; cross-citation
-#     to Pulsar's GF(257) bridges)
-#   - Jasmin type-check + jasmin-ct (no Jasmin sources;
-#     libjade covers FIPS 205 single-party but not redistributed)
-#   - dudect statistical CT validation (roadmap v0.6.0)
+# NOT in this gate (intentionally): dudect at smoke budget. A
+# 40k-sample dudect run can't certify constant time; the budget
+# isn't statistically meaningful. The REAL dudect gate is the
+# submission-grade run from ct/dudect/run-submission.sh (10^9
+# samples per target on a pinned CPU). It belongs in the nightly
+# gate, not per-push.
 #
-# These remain ROADMAP items; see CRYPTOGRAPHER-SIGN-OFF.md
-# "Gates" section for the gate inventory and closure targets.
+# Any per-check failure (exit 2) fails the orchestrator with the
+# same code. Per-check skips (exit 0 with a [skip] message) do not
+# fail the gate.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-export GOWORK=off
 
-echo "==> Magnetar high-assurance gate"
-echo "    surface:    $REPO_ROOT (ref/go/pkg/magnetar/)"
-echo "    HONESTY:    NO EC / Lean / Jasmin theories for threshold overlay (see PROOF-CLAIMS.md §3.1)"
+CHECKS=(
+    "scripts/checks/jasmin.sh"
+    "scripts/checks/ec-admits.sh"
+    "scripts/checks/ec-regressions.sh"
+    "scripts/checks/ec-refinement-scaffold.sh"
+    "scripts/check-lean-bridge.sh"
+    "scripts/checks/extraction.sh"
+    "scripts/checks/ec-compile.sh"
+    "scripts/checks/go-tests.sh"
+)
+
+echo "==> Magnetar high-assurance track"
+echo "    jasmin/   $REPO_ROOT/jasmin"
+echo "    easycrypt $REPO_ROOT/proofs/easycrypt"
+echo "    dudect    $REPO_ROOT/ct/dudect"
 echo
 
 OVERALL=0
+for check in "${CHECKS[@]}"; do
+    rc=0
+    bash "$REPO_ROOT/$check" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        OVERALL=$rc
+        echo
+        echo "==> $check exited rc=$rc — aborting gate"
+        break
+    fi
+    echo
+done
 
-echo "==> Check 1: go build ./..."
-if ! go build ./...; then
-    echo "==> FAIL: go build"
-    OVERALL=2
-fi
-
-echo
-echo "==> Check 2: go vet ./..."
-if ! go vet ./...; then
-    echo "==> FAIL: go vet"
-    OVERALL=2
-fi
-
-echo
-echo "==> Check 3: secret-log grep guard"
-# Warn (not fail) if logging primitives appear in code that touches
-# secret-typed paths. The full DD-007-style linter from Pulsar is not
-# yet ported; this is a smoke check.
-HITS=$(grep -rn -E "(fmt\.Print|log\.Print|log\.Fatal|log\.Panic)" \
-    ref/go/pkg/magnetar/ 2>/dev/null \
-    | grep -v "_test.go" \
-    | grep -v "// nolint:nosecretlog" || true)
-if [[ -n "$HITS" ]]; then
-    echo "    [warn] potential secret-log call sites (review manually):"
-    echo "$HITS" | head -20
-    echo "    (HONESTY: this is a smoke check, not a blocking gate)"
-else
-    echo "    [ok] no obvious secret-log call sites in ref/go/pkg/magnetar/"
-fi
-
-echo
-echo "==> Check 4: unit test smoke (-short)"
-if ! go test -count=1 -short -timeout 240s ./ref/go/pkg/magnetar/; then
-    echo "==> FAIL: short test suite"
-    OVERALL=2
-fi
-
-echo
 if [[ $OVERALL -eq 0 ]]; then
-    echo "==> done — high-assurance gate green (within the documented scope)"
-else
-    echo "==> done — gate FAILED (rc=$OVERALL)"
+    echo "==> done — high-assurance gate green"
 fi
 exit $OVERALL
