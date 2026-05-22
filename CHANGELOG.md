@@ -10,6 +10,139 @@ Magnetar adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 (Nothing pending at this writing.)
 
+## [0.5.0] — 2026-05-21 — Per-validator standalone is the primary public-BFT primitive; THBS demoted to TEE-only
+
+### Architectural decomplecting (HONEST framing)
+
+This release re-architects Magnetar for **public-BFT-safety**. The
+previous v0.4.x messaging conflated two distinct trust models:
+threshold-HBS (custody, requires dealer/aggregator-in-TCB) and
+N-of-N collected signatures (public-BFT, no TCB). v0.5.0 ships the
+canonical separation:
+
+- **PRIMARY public-BFT primitive**: per-validator standalone
+  SLH-DSA via `magnetar.PerValidatorKeypair` +
+  `magnetar.ValidatorSign` + `magnetar.VerifyAggregateCert`
+  (`ref/go/pkg/magnetar/standalone.go`). Per-validator keypair, no
+  DKG, no dealer, no aggregator-in-TCB. The consensus layer
+  collects N validator signatures and counts valid signers; the
+  quorum policy decision lives at the consumer. Z-Chain Groth16
+  rollup compresses N × |σ| to ~192 bytes.
+- **CUSTODY (TEE required)**: `magnetar.CombineWithSeedReconstruction`
+  (reveal-and-aggregate) OR `thbs.DealerDKG` + `thbs.SignShare` +
+  `thbs.Aggregate` (true threshold HBS). The dealer / aggregator
+  is in the TCB by policy — both REQUIRE TEE attestation.
+- **RESEARCH (v0.6+)**: `thbs/dkg2/` skeleton ships the PVSS
+  layer; MPC-root layer is OPEN RESEARCH tracked at
+  `BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1`.
+
+The honest architectural truth: SLH-DSA is hash-based and has no
+algebraic structure that admits FROST-style threshold aggregation
+(Cozzo-Smart EUROCRYPT 2019; Bonte-Smart-Tan 2023; NIST IR 8214).
+True-threshold SLH-DSA without TEE/dealer requires full MPC over
+the SHA-256/SHAKE hash tree — research-grade. For Lux's PUBLIC-BFT
+consensus, per-validator standalone is the right primitive; for
+M-Chain custody (where a TEE-attested host can be in the TCB by
+policy), the threshold form is correct.
+
+### Added
+
+- **`ref/go/pkg/magnetar/standalone.go`** — the public-BFT-safe
+  PRIMARY primitive surface:
+  - `PerValidatorKeypair(params, rng) → (sk, pk, error)` — standalone
+    FIPS 205 keypair generator. Semantic alias for
+    `GenerateValidatorKey`; explicit name for the public-BFT path.
+  - `ValidatorSign(sk, rng, message) → ([]byte, error)` — canonical
+    public-BFT signing primitive. Returns raw FIPS 205 signature
+    bytes. Deterministic when rng is nil (FIPS 205
+    SignDeterministic).
+  - `ValidatorBatchVerify(params, pubs, msgs, sigs) → ([]bool, error)`
+    — parallel-CPU batch verify returning per-signer bitmap.
+    Routes through the same goroutine fork-join pattern as
+    `luxfi/crypto/slhdsa.VerifyBatch`.
+  - `ValidatorAggregateCert{Mode, Signers, PubKeys, Sigs}` —
+    parallel-slices wire envelope for N per-validator signatures
+    over a single message. Sibling shape to `AggregatedSignature`
+    (aggregate.go) but maps directly to Z-Chain Groth16 rollup
+    witness layout.
+  - `BuildAggregateCert(params, signers, pubKeys, sigs)` —
+    constructor with shape + mode validation and defensive copies.
+  - `VerifyAggregateCert(cert, message, knownValidators) → (count, err)`
+    — verifies every signature against the registered public key
+    and returns the count of valid signers. Unknown / pubkey-
+    mismatched signers are counted as INVALID (not fatal — defense
+    against impersonation that does not abort the entire batch).
+- **`ref/go/pkg/magnetar/standalone_test.go`** — 7 tests covering
+  round-trip + determinism + independence, parallel batch verify,
+  bad-sig-counted-out, unknown-validator rejection,
+  duplicate-validator dedupe-and-count-once, GPU/parallel
+  provenance assertion, all-invalid returns-zero, and shape checks.
+- **`ref/go/pkg/thbs/dkg2/`** — research-grade SKELETON of a
+  public DKG for threshold HBS. v1 ships the PVSS layer; the
+  MPC-root layer is OPEN RESEARCH tracked at
+  `BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1`. Files:
+  - `doc.go` — package doc, scope, literature (Schoenmakers PVSS,
+    Damgård-Pastro-Smart-Zakarias SPDZ, Boyle-Gilboa-Ishai FSS,
+    Wang-Ranellucci-Katz MPC).
+  - `pvss.go` — Deal / Verify wire shape with `ErrSkeletonOnly` /
+    `ErrMPCRootNotImpl` sentinels preventing production
+    consumption.
+  - `complaint.go` — Complaint round wire shape (BadShare,
+    MissingDelivery, CommitmentMalformed) + dealer Defense.
+  - `consensus.go` — qualified-set agreement + `Run` orchestrator +
+    `RootMPC` stub. Every public function returns
+    `ErrSkeletonOnly` or `ErrMPCRootNotImpl`.
+  - `README.md` — public-facing scope, literature, v0.6+ checklist.
+  - `dkg2_test.go` — sentinel-pinning tests.
+- **`BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1`** — open-research entry
+  for public DKG over HBS. PVSS skeleton shipped; MPC-root layer
+  open. 9-step v0.6+ checklist.
+
+### Changed
+
+- **`ref/go/pkg/thbs/thbs.go`** — package doc rewritten to honestly
+  demote the threshold form to "DEALER-BACKED v1 — NOT public-BFT-
+  safe". Directs callers to `magnetar.ValidatorSign` for public BFT
+  and to `thbs.DealerDKG` only for M-Chain custody where the
+  dealer is in the TCB by TEE attestation. Cites the
+  `BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1` research path.
+- **`ref/go/pkg/thbs/dealer.go`** — renamed `DKG` → `DealerDKG` and
+  `DKGAll` → `DealerDKGAll`. The function bodies are unchanged;
+  the rename honestly reflects that v1 has a dealer. Callers in
+  `thbs_test.go` updated. `DKGConfig` / `DKGOptions` retained
+  (config struct shape applies to both v1 dealer and a future v2
+  public DKG).
+- **`DEPLOYMENT-RUNBOOK.md` §0** — rewritten to direct PUBLIC BFT
+  CONSENSUS users to `magnetar.ValidatorSign` +
+  `magnetar.VerifyAggregateCert` as the primary primitive; demotes
+  `CombineWithSeedReconstruction` and `thbs.DealerDKG` to the
+  M-Chain custody / TEE-attested path; cites `thbs/dkg2/` as the
+  v0.6+ research path. New §9 documents the
+  `ValidatorSign`/`VerifyAggregateCert` primary primitive in detail.
+- **`BLOCKERS.md`** — header updated to v0.5.0 framing; new
+  `MAGNETAR-PUBLIC-DKG-1` research entry.
+
+### Honest framing
+
+- The threshold form of Magnetar (both `CombineWithSeedReconstruction`
+  and `thbs.DealerDKG`) is FUNDAMENTALLY not public-BFT-safe. This
+  is not a Magnetar choice; it is a property of hash-based
+  signatures. The literature is clear (Cozzo-Smart, Bonte-Smart-Tan,
+  NIST IR 8214). The honest fix is the architectural pivot in
+  v0.5.0: use the threshold form for custody (where TEE
+  attestation puts the dealer/aggregator in the TCB by policy) and
+  use per-validator standalone for public consensus.
+- The Lux consensus stack ALREADY does the right thing for ML-DSA
+  via `QuasarCert.MLDSAProof` (per-validator standalone ML-DSA
+  signatures collected into a multi-signer cert). The
+  `ValidatorSign` + `VerifyAggregateCert` API makes the same
+  pattern explicit and canonical for SLH-DSA.
+- The `thbs/dkg2/` skeleton is honestly research-grade. It exists
+  to make the v0.6+ research direction concrete without pretending
+  to ship a working public DKG. Every function returns a sentinel
+  error pointing at the BLOCKERS entry. A production caller
+  CANNOT accidentally consume the unfinished pipeline.
+
 ## [0.4.2] — 2026-05-21 — THBS v1 + Public-BFT-safe aggregate-signatures API
 
 This release introduces TWO new signing modes:
