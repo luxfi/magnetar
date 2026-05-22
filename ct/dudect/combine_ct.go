@@ -3,27 +3,29 @@
 
 //go:build magnetar_combine_ct
 
-// combine_ct.go — cgo bridge exposing magnetar.Combine to the C
-// dudect harness in dudect_combine.c.
+// combine_ct.go — cgo bridge exposing magnetar.CombineWithSeedReconstruction
+// to the C dudect harness in dudect_combine.c.
 //
 // CT POPULATION (operational framing, NOT a standards mandate):
-// both dudect classes are VALID Combine inputs — independently
-// randomized threshold ceremonies over the SAME shares. The bridge
-// pre-builds a pool of K full (Round1, Round2) tapes by running the
-// threshold protocol K times with different per-party RNG seeds.
-// All K ceremonies produce the SAME final FIPS 205 SLH-DSA signature
-// (the reveal-and-aggregate Combine collapses through the same
-// master seed via Lagrange reconstruction), but the intermediate
-// Round-1 commits + Round-2 (mask, masked) reveals vary across tapes.
+// both dudect classes are VALID CombineWithSeedReconstruction inputs —
+// independently randomized threshold ceremonies over the SAME shares.
+// The bridge pre-builds a pool of K full (Round1, Round2) tapes by
+// running the threshold protocol K times with different per-party
+// RNG seeds. All K ceremonies produce the SAME final FIPS 205 SLH-DSA
+// signature (the reveal-and-aggregate CombineWithSeedReconstruction
+// collapses through the same master seed via Lagrange reconstruction),
+// but the intermediate Round-1 commits + Round-2 (mask, masked)
+// reveals vary across tapes.
 //
 // dudect class assignment:
 //   class A: always tape[0]      (byte-identical Combine inputs)
 //   class B: tape[rand % K]      (varying-but-valid Combine inputs)
 //
-// Both classes pass every internal Combine check (commit re-derive,
-// Lagrange reconstruct, mix-to-seed, KeyFromSeed pk match, FIPS 205
-// SignDeterministic). Any timing difference between classes is a real
-// signature-content-dependent timing in the Combine pipeline, not a
+// Both classes pass every internal CombineWithSeedReconstruction
+// check (commit re-derive, Lagrange reconstruct, mix-to-seed,
+// KeyFromSeed pk match, FIPS 205 SignDeterministic). Any timing
+// difference between classes is a real signature-content-dependent
+// timing in the CombineWithSeedReconstruction pipeline, not a
 // rejection-path artifact.
 //
 // Build (Linux):
@@ -178,8 +180,8 @@ func magnetar_combine_ct_setup() C.int {
 			}
 			sr2[i] = m
 		}
-		// Sanity: this tape's Combine must succeed.
-		if _, err := magnetar.Combine(params, pub, msg, nil, false, sid, 1, quorum, t, sr1, sr2, shares); err != nil {
+		// Sanity: this tape's CombineWithSeedReconstruction must succeed.
+		if _, err := magnetar.CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, 1, quorum, t, sr1, sr2, shares); err != nil {
 			return 9
 		}
 		cFixtureTapes[k] = combineTape{round1: sr1, round2: sr2}
@@ -217,11 +219,12 @@ func magnetar_combine_ct_input_size() C.size_t {
 // One dudect measurement sample.
 //
 // `data` points to a 4-byte big-endian uint32 tape index; the
-// bridge reduces it mod kCombineValidPool and runs Combine on the
-// indexed (Round1, Round2) tape. Both classes (A: fixed index 0,
-// B: caller-supplied index) drive Combine through the SAME code
-// path on VALID inputs — any timing difference is a real
-// data-dependent signal, not a rejection-path artifact.
+// bridge reduces it mod kCombineValidPool and runs
+// CombineWithSeedReconstruction on the indexed (Round1, Round2)
+// tape. Both classes (A: fixed index 0, B: caller-supplied index)
+// drive CombineWithSeedReconstruction through the SAME code path
+// on VALID inputs — any timing difference is a real data-dependent
+// signal, not a rejection-path artifact.
 func magnetar_combine_ct(data *C.uint8_t) {
 	if cFixtureParams == nil {
 		return
@@ -231,7 +234,7 @@ func magnetar_combine_ct(data *C.uint8_t) {
 		uint32(kCombineValidPool)
 	tape := cFixtureTapes[idx]
 
-	_, _ = magnetar.Combine(
+	_, _ = magnetar.CombineWithSeedReconstruction(
 		cFixtureParams,
 		cFixturePub,
 		cFixtureMsg,

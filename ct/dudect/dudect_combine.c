@@ -2,11 +2,12 @@
  * Copyright (C) 2025-2026, Lux Industries Inc. All rights reserved.
  * See the file LICENSE for licensing terms.
  *
- * dudect_combine.c — dudect main loop driving magnetar.Combine
- * through the cgo bridge in combine_ct.go.
+ * dudect_combine.c — dudect main loop driving
+ * magnetar.CombineWithSeedReconstruction through the cgo bridge in
+ * combine_ct.go.
  *
  * Same valid-tape-pool methodology as Pulsar's combine harness. Both
- * dudect classes are VALID Combine inputs drawn from a pre-built
+ * dudect classes are VALID CombineWithSeedReconstruction inputs drawn from a pre-built
  * K-entry tape pool (independent threshold ceremonies over the SAME
  * shares; all produce the SAME final signature, but Round-1 / Round-2
  * intermediates vary).
