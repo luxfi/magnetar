@@ -1,11 +1,52 @@
 // Copyright (C) 2025-2026, Lux Industries Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-// Package thbs implements Magnetar-THBS v1: true threshold hash-based
-// signatures in the sense of McGrew, Fluhrer, Gazdag, Kampanakis, Morton,
-// Westerbaan, "Coalition and Threshold Hash-Based Signatures"
+// Package thbs implements Magnetar-THBS v1: TRUE threshold hash-based
+// signatures in the sense of McGrew, Fluhrer, Gazdag, Kampanakis,
+// Morton, Westerbaan, "Coalition and Threshold Hash-Based Signatures"
 // (IACR ePrint 2019/793 and the IRTF draft-mcgrew-hash-sigs line of
 // work).
+//
+// =====================================================================
+// !!  DEALER-BACKED v1  —  NOT PUBLIC-BFT-SAFE                        !!
+// =====================================================================
+//
+// THIS PACKAGE IS A DEALER-BACKED THRESHOLD HBS CONSTRUCTION.
+//
+//   - A SINGLE DEALER generates the WOTS+ chain heads and FORS secret
+//     leaves at setup, Shamir-shares each across the committee, and
+//     erases the master seed. The dealer LEARNS every secret element
+//     at setup time.
+//   - For PUBLIC-BFT consensus (Lux validator quorums, external
+//     relayers, any setting where the dealer cannot be in the trusted
+//     computing base) this is the WRONG primitive.
+//   - For PUBLIC-BFT consensus on SLH-DSA, use:
+//
+//         github.com/luxfi/magnetar.ValidatorSign        +
+//         github.com/luxfi/magnetar.VerifyAggregateCert
+//
+//     (See ref/go/pkg/magnetar/standalone.go. Per-validator
+//     standalone SLH-DSA keypairs. No DKG. No dealer. No shared
+//     secret. Each validator signs independently; the consensus
+//     layer collects N signatures into a ValidatorAggregateCert
+//     and optionally compresses via Z-Chain Groth16.)
+//
+// THIS PACKAGE IS APPROPRIATE for the M-Chain bridge custody
+// pattern where a TEE-attested host (Intel TDX / AMD SEV-SNP / Intel
+// SGX) acts as the dealer by policy, and the TEE root-of-trust is
+// already in the deployment TCB. For that pattern see
+// DEPLOYMENT-RUNBOOK.md §0 "Choose your mode".
+//
+// THE PUBLIC-DKG PATH (no dealer, no TEE, public-BFT-safe) is
+// research-grade and tracked in BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1.
+// A SKELETON ships at github.com/luxfi/magnetar/ref/go/pkg/thbs/dkg2/
+// — that subpackage implements the PVSS layer (each party
+// contributes randomness to every secret element) but DOES NOT yet
+// solve the MPC-root layer (computing the public Merkle root from
+// secret-shared leaves without revealing the leaves). The MPC-root
+// layer is open research; v0.6+ candidate.
+//
+// =====================================================================
 //
 // CRITICAL DISTINCTION (this is what makes the package "true" threshold):
 //
@@ -21,12 +62,14 @@
 //     signature.
 //
 // This is NOT "collect N independent SLH-DSA signatures and average
-// them"; that's the wrong thing. This is the right thing.
+// them"; that's the wrong thing. This is the right thing — but ONLY
+// when the dealer is in the TCB.
 //
-// V1 SCOPE — honest:
+// V1 SCOPE — HONEST:
 //
 //   - Setup is DEALER-BACKED. A trusted dealer generates the shared
-//     WOTS+/FORS material and distributes shares. (Public DKG = v2.)
+//     WOTS+/FORS material and distributes shares.
+//     (Public DKG = research, see dkg2/.)
 //   - Helper data (the Merkle authentication paths and the public-key
 //     chain endpoints) is shipped alongside the public key. McGrew et
 //     al. allow this.
@@ -40,7 +83,7 @@
 //
 // HARD INVARIANT (cf. THBS-SPEC.md):
 //
-//	OK:        ReconstructElement(slot, elementID, shares)
+//	OK:        reconstructElement(slot, elementID, shares)  [unexported]
 //	Forbidden: ReconstructSeed, ReconstructPrivateKey,
 //	           ExpandPrivateKey, DeriveAllFutureElements
 //

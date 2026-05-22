@@ -4,13 +4,19 @@
 > **full Tier A** (Pulsar-equivalent) on the submission-readiness
 > ladder.
 >
-> **As of v0.3.0**: Tier C → Tier B blockers (BLK-1, BLK-2, BLK-3)
+> **As of v0.5.0**: Tier C → Tier B blockers (BLK-1, BLK-2, BLK-3)
 > are **CLOSED** at v0.2.0. BLK-5 (KAT vectors), BLK-8 (submission
 > package documentation shape) are **CLOSED** at v0.3.0. BLK-4
 > (reference impl + v0.4 lifecycle additions), BLK-6 (cross-validation
 > harness), BLK-7 (proof artifacts), BLK-9 (independent
 > cryptographer review) are partially or fully open; see status
-> below. See `SPEC.md` for the selected construction,
+> below. **MAGNETAR-PUBLIC-DKG-1** (public-DKG threshold HBS) is the
+> v0.6+ research-grade open task; the v0.5.0 release ships the PVSS
+> skeleton at `ref/go/pkg/thbs/dkg2/` and demotes the threshold form
+> to the M-Chain custody / TEE path while promoting per-validator
+> standalone SLH-DSA (`magnetar.ValidatorSign` +
+> `magnetar.VerifyAggregateCert`) as the public-BFT primary primitive.
+> See `SPEC.md` for the selected construction,
 > `SUBMISSION-STATUS.md` for tier definitions and the phased plan,
 > `CRYPTOGRAPHER-SIGN-OFF.md` Gates section for the full Tier A
 > gate inventory.
@@ -179,6 +185,102 @@ External engagement is blocked on:
 - GATE-1 / GATE-2 (EC theory shells + Lean ↔ EC bridge, v0.5.0)
 - GATE-3 (dudect 10⁹ samples, v0.6.0)
 - GATE-5 (v0.4 lifecycle additions for the deployment posture)
+
+## Research path: public-DKG threshold HBS
+
+### MAGNETAR-PUBLIC-DKG-1 — Public DKG for threshold HBS → **OPEN (research-grade, v0.6+ candidate)**
+
+**Context**: the `thbs/` subpackage ships true-threshold HBS per
+McGrew et al. (IACR ePrint 2019/793) but the v1 setup is
+DEALER-BACKED — a single dealer generates the WOTS+ chain heads
+and FORS secret leaves at setup, Shamir-shares them, and erases the
+master seed. Dealer-backed threshold HBS is **NOT public-BFT-safe**
+(the dealer learns every secret element at setup time). The user's
+hard architectural position:
+
+> "We can't do a trusted dealer obv. It HAS to be freaking done
+> right for public chains bro."
+>
+> "For HBS, the hard part is that public keys are hashes/Merkle
+> roots of many secret values. Hashes are nonlinear... a practical
+> public-safe DKG must generate and commit to shared leaf/chain
+> material, not merely share a seed."
+>
+> "DKG = PVSS for secret shares + MPC/public verification for
+> derived roots."
+
+**What's needed** (per the user spec):
+
+1. **PVSS layer (Ingredient A)** — each party j ∈ [n] samples a
+   contribution `r_{j,e}` for every secret element e, Shamir-shares
+   `r_{j,e}` across the committee at threshold t. The joint secret
+   is `x_e = Σ_j r_{j,e}`; no single party ever holds `x_e`. **A
+   SKELETON of this layer ships at `ref/go/pkg/thbs/dkg2/` in
+   v0.5.0** (`pvss.go`, `complaint.go`, `consensus.go`).
+
+2. **MPC-root layer (Ingredient B)** — MPC over SHA-256/SHAKE to
+   compute the public chain endpoints `W_e = H^{w-1}(x_e)` from
+   secret-shared `x_e` without revealing any `x_e`. **THIS IS THE
+   HARD FRONTIER.** Candidate frameworks:
+   - SPDZ-style MPC (Damgård-Pastro-Smart-Zakarias CRYPTO 2012)
+   - Garbled circuits + OT (Wang-Ranellucci-Katz CCS 2017)
+   - Function Secret Sharing (Boyle-Gilboa-Ishai EUROCRYPT 2015)
+   - MP-SPDZ integration (https://github.com/data61/MP-SPDZ)
+
+   For SLH-DSA-SHAKE-192s with the v1 thbs parameter set this is
+   ~750K SHAKE evaluations per DKG ceremony — multi-hour to
+   multi-day per ceremony at current framework performance. The
+   cryptographer team selects the production MPC framework when
+   integrating; the v0.6+ candidate target is "honest cost
+   estimate + working demo at small parameters."
+
+**Status of the skeleton** (`ref/go/pkg/thbs/dkg2/`):
+
+- ✅ `doc.go` — package doc, scope, literature (Schoenmakers PVSS,
+  SPDZ, garbled-circuits, function-secret-sharing).
+- ✅ `pvss.go` — Deal / Verify wire shape; `ErrSkeletonOnly` stubs
+  prevent production consumption.
+- ✅ `complaint.go` — Complaint round wire shape (BadShare,
+  MissingDelivery, CommitmentMalformed); FileComplaint / DealerDefend
+  stubs.
+- ✅ `consensus.go` — Qualified-set agreement + Run orchestrator;
+  `RootMPC` stub returns `ErrMPCRootNotImpl` with explicit pointer
+  to this BLOCKERS entry.
+- ✅ `README.md` — public-facing scope + research path.
+- ✅ Skeleton tests pin the `ErrSkeletonOnly` / `ErrMPCRootNotImpl`
+  sentinels.
+
+**What blocks shipping a working dkg2** (the v0.6+ checklist):
+
+1. Select the production MPC framework (MP-SPDZ, EMP-toolkit,
+   custom).
+2. Implement the SHAKE-256 chain circuit under the chosen MPC.
+3. Benchmark per-element cost; choose parameter set + committee
+   size that fits the deployment budget.
+4. Write production `root.go` (compute joint W_e + public Merkle
+   root from secret-shared x_e).
+5. Wire-format spec for the public root computation transcript
+   (auditability across re-runs).
+6. Integrate with parent `thbs.PublicKey` so the resulting threshold
+   HBS public key is BYTE-EQUAL to a dealer-DKG'd public key for
+   the same elements.
+7. Re-prove the construction (security argument under PVSS + MPC
+   composition; the user's "PVSS + MPC/public verification for
+   derived roots" framing).
+8. Independent cryptographer review (BLK-9-analog gate).
+9. Independent MPC engineer review of the SHAKE-circuit
+   implementation.
+
+**Until MAGNETAR-PUBLIC-DKG-1 closes**:
+
+- PUBLIC-BFT CONSENSUS uses `magnetar.PerValidatorKeypair` +
+  `magnetar.ValidatorSign` + `magnetar.VerifyAggregateCert`
+  (per-validator standalone SLH-DSA, no DKG, no dealer, no
+  aggregator-as-TCB). See `DEPLOYMENT-RUNBOOK.md` §9.
+- M-CHAIN CUSTODY uses `magnetar.CombineWithSeedReconstruction`
+  OR `thbs.DealerDKG` inside a TEE-attested host (the dealer/
+  aggregator is in the TCB by policy). See `DEPLOYMENT-RUNBOOK.md`
+  §1.
 
 ## Non-blockers
 

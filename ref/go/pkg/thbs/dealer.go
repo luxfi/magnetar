@@ -54,7 +54,10 @@ type DKGOptions struct {
 	DealerSeed []byte
 }
 
-// DKG runs the v1 dealer-backed DKG.
+// DealerDKG runs the v1 DEALER-BACKED DKG. The dealer learns every
+// secret element at setup time and Shamir-shares each across the
+// committee. NOT public-BFT-safe — see the package doc comment in
+// thbs.go for the framing.
 //
 // Returns the threshold public key, the calling party's PrivateShare,
 // and any error.
@@ -63,13 +66,17 @@ type DKGOptions struct {
 // generates EVERY party's PrivateShare. The function is wired to
 // produce ALL shares; in a real deployment the dealer would split
 // the returned share-set across parties and zeroise the rest before
-// the dealer-host shuts down. See DKGAll for that path.
+// the dealer-host shuts down. See DealerDKGAll for that path.
 //
 // This helper signature returns the PrivateShare for the FIRST
 // participant only, to match the user-spec signature. To obtain every
-// party's share, call DKGAll.
-func DKG(config DKGConfig) (PublicKey, PrivateShare, error) {
-	pk, shares, err := DKGAll(config, DKGOptions{})
+// party's share, call DealerDKGAll.
+//
+// The renamed-from-DKG marker is deliberate: the v1 path IS dealer-
+// backed and that property is load-bearing for the deployment
+// decision. v0.6+ candidate public DKG lives in subpackage dkg2/.
+func DealerDKG(config DKGConfig) (PublicKey, PrivateShare, error) {
+	pk, shares, err := DealerDKGAll(config, DKGOptions{})
 	if err != nil {
 		return PublicKey{}, PrivateShare{}, err
 	}
@@ -79,11 +86,18 @@ func DKG(config DKGConfig) (PublicKey, PrivateShare, error) {
 	return pk, shares[0], nil
 }
 
-// DKGAll is the same as DKG but returns one PrivateShare per
-// participant (indexed by position in config.Participants). Use this in
-// tests and in a real dealer host where the dealer process needs all
-// shares to distribute them.
-func DKGAll(config DKGConfig, opts DKGOptions) (PublicKey, []PrivateShare, error) {
+// DealerDKGAll is the same as DealerDKG but returns one PrivateShare
+// per participant (indexed by position in config.Participants). Use
+// this in tests and in a real dealer host where the dealer process
+// needs all shares to distribute them.
+//
+// HONEST FRAMING: the dealer process holds the master seed and every
+// per-element secret in memory for the duration of this call. The
+// deferred zeroize call below wipes the master seed before return;
+// per-element secrets are wiped inline as each slot is processed.
+// The dealer MUST run in a TEE (or be the same process as the
+// custody host) if public-BFT safety is required.
+func DealerDKGAll(config DKGConfig, opts DKGOptions) (PublicKey, []PrivateShare, error) {
 	if err := validateDKGConfig(config); err != nil {
 		return PublicKey{}, nil, err
 	}
