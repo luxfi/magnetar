@@ -156,9 +156,9 @@ func TestE2E_DistinctQuorums_SameSignature(t *testing.T) {
 		for i, s := range signers {
 			r2[i], _, _ = s.Round2(r1)
 		}
-		sig, err := Combine(params, pub, msg, nil, false, sid, 1, quorum, len(idxs), r1, r2, shares)
+		sig, err := CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, 1, quorum, len(idxs), r1, r2, shares)
 		if err != nil {
-			t.Fatalf("Combine: %v", err)
+			t.Fatalf("CombineWithSeedReconstruction: %v", err)
 		}
 		return sig.Bytes
 	}
@@ -228,9 +228,9 @@ func TestE2E_LargeMessage_BoundaryOK(t *testing.T) {
 	for i, s := range signers {
 		r2[i], _, _ = s.Round2(r1)
 	}
-	sig, err := Combine(params, pub, msg, ctx, false, sid, 1, quorum, 2, r1, r2, shares)
+	sig, err := CombineWithSeedReconstruction(params, pub, msg, ctx, false, sid, 1, quorum, 2, r1, r2, shares)
 	if err != nil {
-		t.Fatalf("Combine: %v", err)
+		t.Fatalf("CombineWithSeedReconstruction: %v", err)
 	}
 	if err := VerifyCtx(params, pub, msg, ctx, sig); err != nil {
 		t.Fatalf("VerifyCtx: %v", err)

@@ -145,9 +145,9 @@ func TestN1_ByteEquality_ThresholdMatchesCentralized(t *testing.T) {
 				}
 				r2[i] = m
 			}
-			thresholdSig, err := Combine(params, pub, msg, ctx, false, sid, attempt, quorumIDs, tc.t, r1, r2, shares)
+			thresholdSig, err := CombineWithSeedReconstruction(params, pub, msg, ctx, false, sid, attempt, quorumIDs, tc.t, r1, r2, shares)
 			if err != nil {
-				t.Fatalf("Combine: %v", err)
+				t.Fatalf("CombineWithSeedReconstruction: %v", err)
 			}
 
 			// --- Centralized path. ---
@@ -237,9 +237,9 @@ func TestN1_ByteEquality_DifferentQuorumsSameSignature(t *testing.T) {
 		for i, s := range signers {
 			r2[i], _, _ = s.Round2(r1)
 		}
-		sig, err := Combine(params, pub, msg, ctx, false, sid, 1, quorum, len(idxs), r1, r2, shares)
+		sig, err := CombineWithSeedReconstruction(params, pub, msg, ctx, false, sid, 1, quorum, len(idxs), r1, r2, shares)
 		if err != nil {
-			t.Fatalf("Combine: %v", err)
+			t.Fatalf("CombineWithSeedReconstruction: %v", err)
 		}
 		return sig.Bytes
 	}
