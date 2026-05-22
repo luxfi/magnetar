@@ -5,63 +5,91 @@
 
 ## 0. Choose your mode — the most important decision
 
-Magnetar ships **two distinct signing modes** with different trust
+Magnetar ships **three distinct signing surfaces** with different trust
 models. Picking the wrong one is the single largest deployment risk.
 
-| Property | `AggregateSignatures` (public-BFT) | `CombineWithSeedReconstruction` (custody) |
-|---|---|---|
-| Output | N separate FIPS 205 signatures | One FIPS 205 signature |
-| Aggregator-as-TCB | NO (no party holds the master seed) | YES (master seed live in aggregator) |
-| Public-BFT-safe | YES | NO — requires TEE |
-| Validator key model | Per-validator, independent keypairs | Shared via DKG + Shamir-split seed |
-| DKG required | NO | YES |
-| Wire size | N × \|σ\| (e.g. 21 × 16 KiB = 336 KiB at L3) | \|σ\| (16 KiB at L3) |
-| Z-Chain Groth16-compressible | YES (~192 B proof) | N/A (already 1 σ) |
-| Module | `aggregate.go` | `combine.go` |
-| File | `ref/go/pkg/magnetar/aggregate.go` | `ref/go/pkg/magnetar/combine.go` |
-| Use case | Lux public-BFT validator quorum | M-Chain custody w/ TEE attestation |
+| Surface | Trust model | Public-BFT safe | Use case |
+|---|---|---|---|
+| `ValidatorSign` + `VerifyAggregateCert` | Per-validator standalone keys | **YES** | **Lux public-BFT validator quorum (PRIMARY)** |
+| `AggregateSignatures` (SignedBundle form) | Per-validator standalone keys | YES | Same as above, SDK-friendly bundle shape |
+| `CombineWithSeedReconstruction` | Aggregator-as-TCB (TEE required) | NO | M-Chain custody w/ TEE attestation |
+| `thbs.DealerDKG` + `thbs.SignShare` + `thbs.Aggregate` | Trusted-dealer-as-TCB (TEE required) | NO | M-Chain bridge custody w/ TEE attestation |
+| `thbs/dkg2/` | Public PVSS + MPC (research) | YES (when complete) | Future research; v0.6+ candidate |
+
+### TL;DR
+
+- **PUBLIC BFT CONSENSUS** (validator quorum, untrusted aggregator
+  host) → `magnetar.PerValidatorKeypair` + `magnetar.ValidatorSign` +
+  `magnetar.VerifyAggregateCert` (`ref/go/pkg/magnetar/standalone.go`).
+  This is the **CANONICAL primary primitive for Lux public-BFT
+  post-quantum consensus**. Per-validator standalone SLH-DSA keypairs;
+  no DKG; no dealer; no aggregator-as-TCB. The consensus layer
+  collects N validator signatures and a relying party calls
+  `VerifyAggregateCert` to obtain the count of valid signers. Wire
+  cost is N × |σ|; Z-Chain Groth16 rollup compresses to ~192 bytes.
+  See §10.
+
+- **PUBLIC BFT, SDK SHAPE** (same model as above, but the
+  consumer prefers the nested-bundle wire format) →
+  `magnetar.AggregateSignatures` + `magnetar.VerifyAggregated`
+  (`ref/go/pkg/magnetar/aggregate.go`). Byte-equivalent to the
+  standalone form; differs only in wire encoding shape.
+
+- **M-CHAIN CUSTODY with TEE** (M-Chain thresholdvm host with
+  TDX/SEV-SNP/SGX attestation, the LP-134 thresholdvm M-Chain mode)
+  → EITHER:
+    * `magnetar.CombineWithSeedReconstruction` (reveal-and-aggregate;
+      master seed reconstructed in aggregator memory; trust caveat in
+      §1 applies), OR
+    * `thbs.DealerDKG` + `thbs.SignShare` + `thbs.Aggregate` (true
+      threshold HBS per McGrew et al.; dealer learns secrets at
+      setup time; per-signature reveals only the SELECTED elements).
+  Both REQUIRE TEE attestation of the dealer/aggregator host.
+
+- **RESEARCH / FUTURE** (public-DKG threshold HBS, no dealer, no
+  TEE) → `thbs/dkg2/` ships the PVSS layer as a skeleton. The
+  MPC-root layer is OPEN RESEARCH; see `BLOCKERS.md::MAGNETAR-PUBLIC-
+  DKG-1`. Will be the public-BFT-safe THRESHOLD path in v0.6+
+  once an MPC framework or MPC-friendly hash is selected.
+
+- **Anything else** → `magnetar.ValidatorSign`. The reveal-and-
+  aggregate and dealer-backed-threshold paths are NOT safe for
+  public deployments.
 
 ### Decision tree
 
 ```
-                    ┌──────────────────────────────────┐
-                    │  Who needs to verify the σ?      │
-                    └──────────────────────────────────┘
+              ┌────────────────────────────────────────────────┐
+              │  WHO NEEDS TO VERIFY THIS SIGNATURE?           │
+              └────────────────────────────────────────────────┘
                                   │
               ┌───────────────────┴───────────────────┐
               │                                       │
-        Public, untrusted                       Internal,
-        verifiers (BFT chain,                   pre-attested
-        external relayers, etc.)                 TCB
+        PUBLIC,                                INTERNAL,
+        untrusted verifiers                    pre-attested TCB
+        (BFT chain,                            (M-Chain custody,
+        external relayers)                     thresholdvm)
               │                                       │
               ▼                                       ▼
-   ┌─────────────────────┐                ┌─────────────────────┐
-   │ AggregateSignatures │                │ Is an aggregator    │
-   │   (public-BFT)      │                │ host attested by TEE│
-   │                     │                │ (TDX/SEV-SNP/SGX) ? │
-   │ + Z-Chain Groth16   │                └─────────────────────┘
-   │   rollup for size   │                          │
-   │   compression       │           ┌──────────────┴──────────────┐
-   └─────────────────────┘           │                             │
-                                    YES                           NO
-                                     │                             │
-                                     ▼                             ▼
-                            ┌─────────────────────┐    ┌─────────────────────┐
-                            │ CombineWithSeed-    │    │ AggregateSignatures │
-                            │ Reconstruction      │    │ — do NOT use Combine│
-                            │ (custody / M-Chain) │    │ WithSeedReconstr.   │
-                            └─────────────────────┘    │ outside TEE!        │
-                                                       └─────────────────────┘
+   ┌─────────────────────────┐          ┌─────────────────────────────┐
+   │   magnetar.             │          │ Is an aggregator/dealer host│
+   │   ValidatorSign +       │          │ attested by TEE             │
+   │   VerifyAggregateCert   │          │ (TDX/SEV-SNP/SGX)?          │
+   │                         │          └─────────────────────────────┘
+   │   (PRIMARY public-BFT-  │                       │
+   │    safe primitive;      │           ┌───────────┴───────────┐
+   │    per-validator        │           │                       │
+   │    standalone keys)     │          YES                     NO
+   │                         │           │                       │
+   │ + Z-Chain Groth16       │           ▼                       ▼
+   │   rollup compresses     │  ┌─────────────────────┐  ┌──────────────────────┐
+   │   N × |σ| → ~192 B      │  │ Pick one of:        │  │ magnetar.ValidatorSign│
+   └─────────────────────────┘  │ - magnetar.Combine- │  │ — DO NOT use the     │
+                                │   WithSeedReconstr. │  │ dealer / reveal-and- │
+                                │ - thbs.DealerDKG +  │  │ aggregate paths      │
+                                │   thbs.SignShare    │  │ outside TEE!         │
+                                └─────────────────────┘  └──────────────────────┘
 ```
-
-### TL;DR
-- **PUBLIC BFT** (validator quorum, untrusted aggregator host) →
-  `AggregateSignatures` (N separate sigs). See §10.
-- **M-CHAIN CUSTODY with TEE** (M-Chain thresholdvm host with
-  TDX/SEV-SNP/SGX attestation) → `CombineWithSeedReconstruction`.
-  Trust caveat in §1 applies — operator MUST enforce the §1 mitigations.
-- **Anything else** → `AggregateSignatures`. The reveal-and-aggregate
-  path is NOT safe for public deployments.
 
 ## 1. `CombineWithSeedReconstruction` (v0.1 reveal-and-aggregate) trust caveat
 
@@ -169,9 +197,121 @@ Operators deploying Magnetar v0.1 do so at their own risk and SHOULD layer it wi
 ## 8. Cross-references
 
 - `SPEC.md` — full protocol specification
-- `BLOCKERS.md` — Tier B → A path
+- `BLOCKERS.md` — Tier B → A path (incl. `MAGNETAR-PUBLIC-DKG-1` for the public-DKG research path)
 - `SUBMISSION-STATUS.md` — NIST MPTC submission status
+- `THBS-SPEC.md` — true threshold HBS subpackage scope and v1/v2/v3 roadmap
+- `ref/go/pkg/thbs/dkg2/README.md` — public-DKG skeleton + research path
 - [`luxfi/pulsar/DEPLOYMENT-RUNBOOK.md`](https://github.com/luxfi/pulsar/blob/main/DEPLOYMENT-RUNBOOK.md) — sibling runbook for the threshold M-LWE primitive
+
+## 9. Public-BFT primary primitive: `ValidatorSign` + `VerifyAggregateCert`
+
+This is the **CANONICAL primary primitive** for using Magnetar in a
+Lux public-BFT validator quorum. It does NOT require an aggregator
+or dealer in the TCB. **This is the path you SHOULD pick** unless
+§0's decision tree points elsewhere.
+
+### Construction summary
+
+1. **Per-validator keygen** (one-time, off-chain): each validator `i`
+   independently runs `magnetar.PerValidatorKeypair(params, rng)` to
+   produce its own (sk_i, pk_i). **No DKG.** **No shared seed.** **No
+   resharing ceremony.** The validator-set registry binds
+   `(ValidatorID_i, pk_i)` so peers can verify this validator's
+   signatures.
+
+2. **Per-validator sign** (one signature per block): each validator
+   `i` calls `magnetar.ValidatorSign(sk_i, nil, message)` to produce
+   the raw FIPS 205 signature bytes (length = params.SignatureSize).
+   The signature is byte-identical to single-party FIPS 205
+   SignDeterministic and verifies under unmodified `slhdsa.Verify`.
+   Bind chain-id / block-height into `message` upstream of this call
+   (the consensus layer's transcript-hash pattern handles this; see
+   `luxfi/consensus` `QuasarCert`).
+
+3. **Build aggregate cert** (consensus layer): collect N
+   per-validator signatures and assemble into a
+   `ValidatorAggregateCert{Mode, Signers, PubKeys, Sigs}` via
+   `magnetar.BuildAggregateCert(params, signers, pubKeys, sigs)`.
+   The cert's parallel-slice shape maps directly onto a Z-Chain
+   Groth16 rollup witness — N parallel signatures become N parallel
+   circuit inputs.
+
+4. **Verify aggregate cert** (relying party): a verifier calls
+   `magnetar.VerifyAggregateCert(cert, message, knownValidators)`
+   which returns the COUNT of valid signers. The verifier compares
+   the count against its quorum threshold to make the policy
+   decision. Unknown / pubkey-mismatched signers are counted as
+   INVALID but are NOT fatal — the cert may carry a stale-registry
+   tail that the verifier should not abort on.
+
+### Security model
+
+| Property | `ValidatorSign` + `VerifyAggregateCert` | Notes |
+|---|---|---|
+| **Unforgeability** | FIPS 205-grade per signer | Each σ_i is a standard FIPS 205 signature; forgery reduces to the FIPS 205 EUF-CMA assumption per signer. |
+| **No single-host TCB** | YES | No party ever holds N validators' secret material together. Compromising one validator host leaks ONE sk_i, not the group key. |
+| **No dealer-in-TCB** | YES | Each validator generates its keypair INDEPENDENTLY; no party ever sees another validator's secret material. |
+| **No aggregator-in-TCB** | YES | The aggregator is a pure-public-data shape-checker; the cert's Verify step does not require the aggregator to be trusted. |
+| **Quorum byzantine tolerance** | Yes (consensus-layer policy) | The count returned by `VerifyAggregateCert` is compared against the consensus threshold (e.g. 2f+1 for f Byzantine faults). |
+| **Per-validator slashing** | YES | Each σ_i is independently attributable to ValidatorID_i; the consensus layer can publish proof-of-double-sign on (ValidatorID_i, σ_a, σ_b, m_a, m_b). |
+| **Post-quantum hardness** | FIPS 205 (~192-bit at SHAKE-192s) | All N signatures use the SAME FIPS 205 parameter set; no hybrid weakening. |
+| **Replay resistance** | Caller-bound message | Bind chain-id / block-height into `message` upstream. |
+
+### Why this is the right primary primitive for SLH-DSA in public BFT
+
+SLH-DSA is HASH-BASED. It has no algebraic structure that admits
+FROST-style threshold aggregation. The literature confirms this is
+fundamental (Cozzo-Smart EUROCRYPT 2019; Bonte-Smart-Tan 2023; NIST
+IR 8214). Any true-threshold SLH-DSA construction requires either:
+
+- A **dealer-in-TCB** (the v1 `CombineWithSeedReconstruction` and
+  `thbs.DealerDKG` paths — REQUIRES TEE), or
+- A **full MPC over the SHA-256/SHAKE hash tree** (research-grade,
+  multi-second to multi-hour per signature; tracked at
+  `BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1`).
+
+For PUBLIC BFT consensus, the correct architecture is "N separate
+signatures, count valid ones, apply policy threshold". The
+`ValidatorSign` + `VerifyAggregateCert` path expresses exactly this.
+The wire cost is N × |σ|; this is the irreducible cost of being
+TCB-free on a hash-based signature scheme.
+
+The Z-Chain Groth16 rollup compresses N × |σ| to ~192 bytes when the
+relying party cannot consume the raw N-bundle envelope. The rollup
+is a separate primitive (lux-zchain spec); Magnetar produces its
+input but does NOT consume or verify the proof.
+
+### Operational checklist
+
+- [ ] Generate each validator's keypair on the validator host with a
+      hardware RNG. NEVER share sk_i across hosts.
+- [ ] Encrypt sk_i at rest with a host-bound key (TPM-sealed or
+      KMS-wrapped). NEVER write sk_i to disk in plaintext.
+- [ ] Publish (ValidatorID_i, pk_i) to the validator-set registry
+      via the same on-chain registration flow you'd use for
+      classical BLS validators.
+- [ ] The consensus layer SHOULD parallelize verify by routing
+      `cert` bytes through `luxfi/crypto/slhdsa.VerifyBatch` for GPU
+      substrate acceleration (see `crypto/slhdsa/gpu.go`). Magnetar's
+      goroutine-parallel CPU path is the floor; the upstream GPU
+      substrate is the ceiling.
+- [ ] On Byzantine fault detection (double-sign), produce slashing
+      evidence at the consensus layer.
+
+### Honest non-warranties
+
+- **No formal proof** of the aggregate construction beyond FIPS
+  205's per-signature security. The construction is a thin layer
+  over N independent FIPS 205 signatures — its security argument is
+  "N × FIPS 205 EUF-CMA", which is sufficient but not separately
+  formalized in EasyCrypt/Lean.
+- **No dudect on `VerifyAggregateCert`.** The function dispatches
+  over per-validator data which is public (NodeID + PublicKey are
+  network-observable). The signature verify call inherits the
+  dudect coverage of single-party FIPS 205 verify.
+- **No Groth16 verifier ships in this package.** The Z-Chain rollup
+  is a separate primitive — Magnetar produces the input to it but
+  does not consume or verify the proof.
 
 ## 10. Public-BFT aggregate mode (`AggregateSignatures`)
 
@@ -223,6 +363,6 @@ The aggregate mode is the **public-BFT-safe path** for using Magnetar in a valid
 **Document metadata**
 
 - File: `DEPLOYMENT-RUNBOOK.md`
-- Version: v0.4.2 (adds §0 mode chooser + §10 aggregate mode; renames §1 to `CombineWithSeedReconstruction`)
+- Version: v0.5.0 (rewrites §0 mode chooser to direct PUBLIC BFT users to `ValidatorSign` + `VerifyAggregateCert`; adds §9 documenting the new primary primitive; honestly demotes `CombineWithSeedReconstruction` and `thbs.DealerDKG` to the M-Chain custody / TEE-attested path; cites `thbs/dkg2/` skeleton + `BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1` as the public-DKG research path)
 - Date: 2026-05-21
 - Status: operator-facing trust-model disclosure
