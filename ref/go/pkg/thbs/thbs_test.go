@@ -54,12 +54,12 @@ func runDealerDKG(t *testing.T, threshold, n int) (PublicKey, []PrivateShare) {
 	}
 	// Deterministic DKG for stable test vectors.
 	seed := bytes.Repeat([]byte{0xA1}, 64)
-	pk, shares, err := DKGAll(cfg, DKGOptions{DealerSeed: seed})
+	pk, shares, err := DealerDKGAll(cfg, DKGOptions{DealerSeed: seed})
 	if err != nil {
-		t.Fatalf("DKGAll: %v", err)
+		t.Fatalf("DealerDKGAll: %v", err)
 	}
 	if len(shares) != n {
-		t.Fatalf("DKGAll returned %d shares, want %d", len(shares), n)
+		t.Fatalf("DealerDKGAll returned %d shares, want %d", len(shares), n)
 	}
 	return pk, shares
 }
@@ -72,7 +72,7 @@ func TestTHBS_DKG_NoSeedExposure(t *testing.T) {
 	_, shares := runDealerDKG(t, 2, 3)
 	// We inspect every byte of every PrivateShare and assert no part
 	// of it is the dealer seed. Because the dealer seed is wiped
-	// before DKGAll returns, we use a structural check: the share
+	// before DealerDKGAll returns, we use a structural check: the share
 	// must not contain a "seed" field, and ElementShares must consist
 	// of per-element entries.
 	for i, s := range shares {
@@ -670,7 +670,7 @@ func TestTHBS_DKGConfig_Validation(t *testing.T) {
 				Params:       testParams(),
 			}
 			tc.mut(&cfg)
-			_, _, err := DKGAll(cfg, DKGOptions{})
+			_, _, err := DealerDKGAll(cfg, DKGOptions{})
 			if !errors.Is(err, tc.want) {
 				t.Errorf("got %v, want %v", err, tc.want)
 			}
@@ -689,9 +689,9 @@ func TestTHBS_RandomSeed(t *testing.T) {
 		Participants: parts,
 		Params:       testParams(),
 	}
-	pk, shares, err := DKGAll(cfg, DKGOptions{Rng: rand.Reader})
+	pk, shares, err := DealerDKGAll(cfg, DKGOptions{Rng: rand.Reader})
 	if err != nil {
-		t.Fatalf("DKGAll(random): %v", err)
+		t.Fatalf("DealerDKGAll(random): %v", err)
 	}
 	msg := []byte("random-seed-test")
 	const slot Slot = 0
