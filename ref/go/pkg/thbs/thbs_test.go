@@ -762,13 +762,17 @@ func TestTHBS_StateStore_Snapshot(t *testing.T) {
 }
 
 // TestTHBS_RestoreGuardState ensures a restored guard preserves the
-// anti-equivocation evidence trail.
+// anti-equivocation evidence trail INCLUDING the previously-emitted
+// PartialSignature, so post-restart equivocation evidence is
+// third-party verifiable. (See also TestEquivocation_EvidenceAfterRestart
+// and TestEvidence_VerifiableByThirdParty in slot_test.go.)
 func TestTHBS_RestoreGuardState(t *testing.T) {
 	pk, shares := runDealerDKG(t, 2, 3)
 	g := NewGuardWithParams(&shares[0], pk.Params, 1)
 	const slot Slot = 0
 	msgA := []byte("first")
-	if _, err := SignShare(g, slot, msgA); err != nil {
+	pA, err := SignShare(g, slot, msgA)
+	if err != nil {
 		t.Fatalf("SignShare: %v", err)
 	}
 	// Persist and restore.
@@ -778,24 +782,39 @@ func TestTHBS_RestoreGuardState(t *testing.T) {
 	if _, err := SignShare(g2, slot, msgA); err != nil {
 		t.Fatalf("SignShare (restored, same msg): %v", err)
 	}
-	// Different msg = equivocation. NOTE: the previously emitted
-	// share/partial is NOT in the restored guard (we only persist the
-	// digest), so Evidence.ShareA carries a zero PartialSignature. The
-	// digest field IS recovered.
-	_, err := SignShare(g2, slot, []byte("second"))
+	// Different msg = equivocation. After v0.4.3 we persist the full
+	// PartialSignature in SlotRecord, so Evidence.ShareA carries the
+	// original (fully-populated, MAC-verifiable) PartialSignature even
+	// across guard restarts.
+	_, err = SignShare(g2, slot, []byte("second"))
 	if err == nil {
 		t.Fatal("restored guard did not detect equivocation")
 	}
 	if !errors.Is(err, ErrEquivocation) {
 		t.Fatalf("expected ErrEquivocation, got %v", err)
 	}
-	// Verify the restored guard reports the correct DigestA.
+	// Verify the restored guard reports the correct DigestA AND the
+	// fully-populated ShareA.
 	var eq *EquivocationError
 	if !errors.As(err, &eq) {
 		t.Fatal("expected EquivocationError")
 	}
 	if eq.Evidence.DigestA != messageDigest(msgA, slotIDBytes(slot)) {
 		t.Error("DigestA mismatch on restored guard")
+	}
+	if eq.Evidence.ShareA.PartyID != pA.PartyID {
+		t.Error("Evidence.ShareA.PartyID is zero after restart (regression)")
+	}
+	if eq.Evidence.ShareA.MessageDigest != pA.MessageDigest {
+		t.Error("Evidence.ShareA.MessageDigest is zero after restart (regression)")
+	}
+	if len(eq.Evidence.ShareA.Shares) != len(pA.Shares) {
+		t.Errorf("Evidence.ShareA.Shares count %d, want %d (regression)",
+			len(eq.Evidence.ShareA.Shares), len(pA.Shares))
+	}
+	if len(eq.Evidence.ShareA.Proofs) != len(pA.Proofs) {
+		t.Errorf("Evidence.ShareA.Proofs count %d, want %d (regression)",
+			len(eq.Evidence.ShareA.Proofs), len(pA.Proofs))
 	}
 }
 
