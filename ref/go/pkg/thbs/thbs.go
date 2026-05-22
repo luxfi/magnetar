@@ -255,9 +255,35 @@ type ElementID struct {
 // implementation in dealer.go.
 type ShareStore map[ElementID][]uint16
 
-// StateStore is a slot -> message-digest map. Concrete implementation
-// is in slot.go (defensive copy via slotStateImpl).
-type StateStore map[Slot][32]byte
+// SlotRecord is the persisted per-slot record a party keeps for
+// equivocation defense. It binds the slot to BOTH the message digest
+// AND the fully-populated PartialSignature that was emitted at that
+// slot.
+//
+// Persisting the full Partial (not just the digest) is REQUIRED so
+// that on subsequent equivocation a third party can verify the
+// previously-emitted share's MAC tags against DigestA. A digest-only
+// store breaks the evidence chain: the slashing layer would receive
+// an empty PartialSignature{} for ShareA and could not cryptographically
+// validate that the prior party committed to DigestA.
+//
+// Wire shape on disk: (Digest [32]byte, Partial PartialSignature).
+// The Partial carries PartyID, SlotID, MessageDigest (= Digest),
+// Shares (~params.WOTSChains+FORSK entries), and Proofs (matching).
+// For the reference params (n=24, WOTSChains=51, FORSK=14) the
+// per-slot record is on the order of ~3 KiB — acceptable for the
+// O(active-slots-per-party) cardinality we expect (at most one
+// signed slot per consensus round per party).
+type SlotRecord struct {
+	Digest  [32]byte
+	Partial PartialSignature
+}
+
+// StateStore is the wire shape for the anti-equivocation log:
+// slot -> SlotRecord{Digest, Partial}. Restored guards reconstruct
+// the runtime slot guard from this map; the persisted Partial is what
+// makes equivocation evidence third-party verifiable across restarts.
+type StateStore map[Slot]SlotRecord
 
 // Slot identifies a one-shot WOTS+ leaf slot (the equivalent of an
 // XMSS leaf in HBS). Same slot used twice with distinct messages =
@@ -333,10 +359,21 @@ var (
 	ErrFORSPub          = errors.New("thbs: reconstructed FORS root mismatch")
 	ErrVerifyRoot       = errors.New("thbs: signature does not chain to public-key root")
 	ErrEquivocation     = errors.New("thbs: party signed two distinct messages under same slot")
+	ErrEvidenceMalformed = errors.New("thbs: equivocation evidence is malformed")
 )
 
-// Evidence carries proof of identifiable double-signing. The
-// consensus layer slashes the offending party using this payload.
+// Evidence carries proof of identifiable double-signing. The consensus
+// layer slashes the offending party using this payload.
+//
+// Evidence is the slashable artifact. To be third-party verifiable BOTH
+// ShareA and ShareB MUST be fully-populated PartialSignatures (with
+// PartyID, SlotID, MessageDigest, Shares, and Proofs). The verifier
+// re-derives the share-MAC tag for each entry under (PartyID, slot,
+// DigestA / DigestB) and confirms it matches the proof. A
+// zero-valued PartialSignature in ShareA is NOT verifiable — the
+// runtime slot guard MUST persist the full prior Partial across
+// restarts to preserve this property. See VerifyEvidence for the
+// canonical third-party check.
 type Evidence struct {
 	PartyID PartyID
 	SlotID  [32]byte

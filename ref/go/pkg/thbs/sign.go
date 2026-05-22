@@ -151,7 +151,10 @@ func SignShare(guard *PrivateShareGuard, slot Slot, msg []byte) (PartialSignatur
 
 	idempotent, prev, err := guard.state.checkAndRecord(slot, digest, partial)
 	if err != nil {
-		// Equivocation.
+		// Equivocation. prev.Partial carries the fully-populated
+		// PartialSignature originally emitted at this slot (restored
+		// across guard lifecycles via SlotRecord persistence), so the
+		// slashing layer can verify ShareA's MAC tags against DigestA.
 		ev := Evidence{
 			PartyID: share.PartyID,
 			SlotID:  slotIDArr,
@@ -475,5 +478,82 @@ func NewGuardWithParams(share *PrivateShare, params HBSParams, evalPoint uint16)
 	g.params = params
 	g.evalPoint = evalPoint
 	return g
+}
+
+// VerifyEvidence is the third-party check that an Evidence payload
+// constitutes a verifiable equivocation by ev.PartyID at slot
+// ev.SlotID. It returns (true, nil) iff:
+//
+//   - ev.SlotID encodes a valid Slot.
+//   - DigestA != DigestB (otherwise there is no equivocation; the
+//     party signed the SAME message twice, which is idempotent).
+//   - ShareA.PartyID == ShareB.PartyID == ev.PartyID.
+//   - ShareA.SlotID == ShareB.SlotID == ev.SlotID.
+//   - ShareA.MessageDigest == DigestA and ShareB.MessageDigest == DigestB.
+//   - Every share in ShareA.Shares has a matching proof whose tag is
+//     bound to (ev.PartyID, slot, DigestA, share) via shareMACTag,
+//     and likewise for ShareB.
+//
+// The check uses ONLY the data carried in Evidence — no access to
+// PublicKey, PrivateShare, or HelperData is required. This is the
+// property that makes Evidence the canonical slashable artifact:
+// every honest validator can independently confirm equivocation from
+// a single Evidence struct.
+//
+// VerifyEvidence does NOT consult an external party-allowlist; the
+// slashing layer is expected to confirm ev.PartyID is a member of the
+// committee for the appropriate epoch via its own state.
+func VerifyEvidence(ev Evidence) (bool, error) {
+	slot, ok := slotFromID(ev.SlotID)
+	if !ok {
+		return false, ErrEvidenceMalformed
+	}
+	if ev.DigestA == ev.DigestB {
+		return false, ErrEvidenceMalformed
+	}
+	if ev.ShareA.PartyID != ev.PartyID || ev.ShareB.PartyID != ev.PartyID {
+		return false, ErrEvidenceMalformed
+	}
+	if ev.ShareA.SlotID != ev.SlotID || ev.ShareB.SlotID != ev.SlotID {
+		return false, ErrEvidenceMalformed
+	}
+	if ev.ShareA.MessageDigest != ev.DigestA {
+		return false, ErrEvidenceMalformed
+	}
+	if ev.ShareB.MessageDigest != ev.DigestB {
+		return false, ErrEvidenceMalformed
+	}
+	if len(ev.ShareA.Shares) == 0 || len(ev.ShareB.Shares) == 0 {
+		return false, ErrEvidenceMalformed
+	}
+	if len(ev.ShareA.Shares) != len(ev.ShareA.Proofs) {
+		return false, ErrEvidenceMalformed
+	}
+	if len(ev.ShareB.Shares) != len(ev.ShareB.Proofs) {
+		return false, ErrEvidenceMalformed
+	}
+	if !verifyShareMACs(ev.PartyID, slot, ev.DigestA, ev.ShareA) {
+		return false, nil
+	}
+	if !verifyShareMACs(ev.PartyID, slot, ev.DigestB, ev.ShareB) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// verifyShareMACs returns true iff every share in p has a proof
+// whose tag is the cSHAKE MAC over (party, slot, digest, share).
+func verifyShareMACs(party PartyID, slot Slot, digest [32]byte, p PartialSignature) bool {
+	for _, s := range p.Shares {
+		expect := shareMACTag(party, slot, digest, s)
+		idx := indexOfShare(p, s)
+		if idx < 0 || idx >= len(p.Proofs) {
+			return false
+		}
+		if !ctEqualArr32(expect, p.Proofs[idx].Tag) {
+			return false
+		}
+	}
+	return true
 }
 

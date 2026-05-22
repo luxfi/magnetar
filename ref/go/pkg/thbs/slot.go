@@ -20,26 +20,25 @@ import "sync"
 // output); if the same slot is requested with a DIFFERENT message
 // digest, the second call returns ErrEquivocation with verifiable
 // evidence the consensus layer can slash on.
-
-// slotRecord is the per-slot record a party keeps.
-type slotRecord struct {
-	Digest [32]byte
-	// The previously-emitted PartialSignature so we can attach it as
-	// evidence on a subsequent equivocation attempt.
-	Partial PartialSignature
-}
+//
+// CRITICAL: the slot guard MUST persist the previously-emitted
+// PartialSignature (not just the digest) so that equivocation
+// evidence produced after a restart contains a fully-populated
+// ShareA. Restoring only the digest breaks third-party verification
+// of Evidence.ShareA (the share-MAC tags cannot be reconstructed
+// from a zero-valued PartialSignature). See VerifyEvidence.
 
 // stateImpl is a concurrency-safe slot state machine. The exported
 // type StateStore (map alias) is the wire-shape; this is the runtime
-// guard.
+// guard. Both use SlotRecord{Digest, Partial} as the per-slot record.
 type stateImpl struct {
 	mu      sync.Mutex
-	records map[Slot]slotRecord
+	records map[Slot]SlotRecord
 }
 
 // newStateImpl returns a fresh slot guard.
 func newStateImpl() *stateImpl {
-	return &stateImpl{records: make(map[Slot]slotRecord)}
+	return &stateImpl{records: make(map[Slot]SlotRecord)}
 }
 
 // checkAndRecord enforces the slot invariant.
@@ -51,8 +50,9 @@ func newStateImpl() *stateImpl {
 //     (idempotent re-emit).
 //   - Second call with mismatched digest: return (false, &prev,
 //     ErrEquivocation). Caller wraps in EquivocationError with full
-//     evidence.
-func (s *stateImpl) checkAndRecord(slot Slot, digest [32]byte, partial PartialSignature) (bool, *slotRecord, error) {
+//     evidence; prev.Partial carries the original (third-party
+//     verifiable) PartialSignature.
+func (s *stateImpl) checkAndRecord(slot Slot, digest [32]byte, partial PartialSignature) (bool, *SlotRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if prev, ok := s.records[slot]; ok {
@@ -61,22 +61,53 @@ func (s *stateImpl) checkAndRecord(slot Slot, digest [32]byte, partial PartialSi
 		}
 		return false, &prev, ErrEquivocation
 	}
-	s.records[slot] = slotRecord{Digest: digest, Partial: partial}
+	s.records[slot] = SlotRecord{Digest: digest, Partial: partial}
 	return false, nil, nil
 }
 
-// snapshot returns a copy of the per-slot digest map. The
-// PartialSignature payload is intentionally omitted from the snapshot:
-// the StateStore wire shape is (slot -> digest), not full signature
-// material. The full record is held only in the runtime guard.
+// load returns the persisted SlotRecord for a slot, if any.
+func (s *stateImpl) load(slot Slot) (SlotRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[slot]
+	return r, ok
+}
+
+// snapshot returns a defensive copy of the per-slot record map. The
+// returned StateStore is suitable for serialisation; restoring a guard
+// from it via NewGuard preserves the full (Digest, Partial) tuple so
+// post-restart equivocation evidence remains third-party verifiable.
 func (s *stateImpl) snapshot() StateStore {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(StateStore, len(s.records))
 	for k, v := range s.records {
-		out[k] = v.Digest
+		// Defensive copy of share/proof slices so callers cannot mutate
+		// the runtime guard via the snapshot.
+		out[k] = SlotRecord{Digest: v.Digest, Partial: clonePartial(v.Partial)}
 	}
 	return out
+}
+
+// clonePartial deep-copies a PartialSignature so a snapshot can be
+// safely mutated by callers without aliasing the runtime guard's
+// records.
+func clonePartial(p PartialSignature) PartialSignature {
+	shares := make([]ElementShare, len(p.Shares))
+	for i, s := range p.Shares {
+		y := make([]uint16, len(s.Y))
+		copy(y, s.Y)
+		shares[i] = ElementShare{ID: s.ID, X: s.X, Y: y, Steps: s.Steps}
+	}
+	proofs := make([]ShareProof, len(p.Proofs))
+	copy(proofs, p.Proofs)
+	return PartialSignature{
+		PartyID:       p.PartyID,
+		SlotID:        p.SlotID,
+		MessageDigest: p.MessageDigest,
+		Shares:        shares,
+		Proofs:        proofs,
+	}
 }
 
 // PrivateShareGuard couples a PrivateShare with the runtime slot
@@ -97,16 +128,35 @@ type PrivateShareGuard struct {
 
 // NewGuard wraps a PrivateShare with a fresh slot state machine. If
 // the PrivateShare already carries AntiEquivState (e.g. restored from
-// disk), the prior records are imported.
+// disk), the prior records (digest AND partial) are imported. The
+// imported Partial is what makes post-restart equivocation evidence
+// third-party verifiable.
 func NewGuard(share *PrivateShare) *PrivateShareGuard {
 	s := newStateImpl()
 	if share.AntiEquivState != nil {
-		for slot, digest := range share.AntiEquivState {
-			s.records[slot] = slotRecord{Digest: digest}
+		for slot, rec := range share.AntiEquivState {
+			s.records[slot] = SlotRecord{
+				Digest:  rec.Digest,
+				Partial: clonePartial(rec.Partial),
+			}
 		}
 	}
 	return &PrivateShareGuard{Share: share, state: s}
 }
 
 // Snapshot returns the StateStore wire shape suitable for serialisation.
+// The returned StateStore carries (Digest, Partial) per slot — both
+// fields are needed to preserve the equivocation evidence trail across
+// restarts.
 func (g *PrivateShareGuard) Snapshot() StateStore { return g.state.snapshot() }
+
+// LoadPartial returns the persisted PartialSignature for a slot if the
+// guard has emitted one (or restored one from disk). Used by callers
+// that want to inspect the equivocation evidence trail directly.
+func (g *PrivateShareGuard) LoadPartial(slot Slot) (digest [32]byte, partial PartialSignature, ok bool) {
+	r, found := g.state.load(slot)
+	if !found {
+		return [32]byte{}, PartialSignature{}, false
+	}
+	return r.Digest, clonePartial(r.Partial), true
+}
