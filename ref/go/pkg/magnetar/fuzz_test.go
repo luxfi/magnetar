@@ -75,10 +75,10 @@ func FuzzCombineParse_NoPanic(f *testing.F) {
 		// MUST NOT PANIC. Returning an error is fine.
 		defer func() {
 			if r := recover(); r != nil {
-				t.Fatalf("Combine panicked on fuzz input: %v", r)
+				t.Fatalf("CombineWithSeedReconstruction panicked on fuzz input: %v", r)
 			}
 		}()
-		_, _ = Combine(params, pub, msg, nil, false, sid, 1, quorum, 2, r1, r2, shares)
+		_, _ = CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, 1, quorum, 2, r1, r2, shares)
 	})
 }
 

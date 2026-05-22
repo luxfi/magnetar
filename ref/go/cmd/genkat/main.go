@@ -233,7 +233,7 @@ func main() {
 			for i, s := range signers {
 				r2[i], _, _ = s.Round2(r1)
 			}
-			sig, err := pm.Combine(params, pub, msg, nil, false, sid, attempt, quorum, tc.T, r1, r2, shares)
+			sig, err := pm.CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, attempt, quorum, tc.T, r1, r2, shares)
 			if err != nil {
 				fail(fmt.Errorf("threshold combine n=%d t=%d: %w", tc.N, tc.T, err))
 			}

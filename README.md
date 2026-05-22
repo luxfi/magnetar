@@ -1,8 +1,12 @@
 # Magnetar — Threshold SLH-DSA (FIPS 205)
 
-> **Tier A documentation shape complete at v0.3.0.**
+> **Tier A documentation shape complete at v0.3.0; public-BFT-safe aggregate mode + THBS v1 added at v0.4.2.**
 > Threshold hash-based PQ signature primitive over FIPS 205 SLH-DSA
-> implementing the **v0.1 reveal-and-aggregate** construction.
+> shipping **three modes**: `pkg/thbs.Aggregate` (TRUE threshold —
+> McGrew et al., selected-elements reconstruction, no aggregator-in-TCB;
+> v1 dealer-backed, see `THBS-SPEC.md`), `AggregateSignatures`
+> (public-BFT-safe N-of-N collected signatures), and
+> `CombineWithSeedReconstruction` (reveal-and-aggregate; requires TEE).
 > The full 12-document Tier A submission package shape (mirroring
 > Pulsar's structure) is now in-tree; mechanized refinement, dudect
 > statistical CT validation, v0.4 lifecycle additions (ML-KEM
@@ -20,8 +24,8 @@
 
 | Field | Value |
 |---|---|
-| Standard | FIPS 205 SLH-DSA (single-party + reveal-and-aggregate threshold) |
-| Construction | v0.1 reveal-and-aggregate (Shamir VSS over the SLH-DSA scheme seed) |
+| Standard | FIPS 205 SLH-DSA (single-party + aggregate + reveal-and-aggregate threshold) |
+| Construction | **Two modes**: (1) `AggregateSignatures` — N independent per-validator FIPS 205 signatures, public-BFT-safe; (2) `CombineWithSeedReconstruction` — Shamir VSS over the SLH-DSA scheme seed (v0.1 reveal-and-aggregate), requires TEE |
 | Reference implementation | `ref/go/pkg/magnetar/` — pure Go, depends on `cloudflare/circl/sign/slhdsa` |
 | KAT vectors | `vectors/{keygen,sign,verify,threshold-sign,dkg}.json` (deterministic regeneration) |
 | Class-N1 claim | threshold signature is byte-identical to single-party `slhdsa.SignDeterministic` on the same reconstructed seed |

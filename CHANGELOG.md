@@ -10,6 +10,140 @@ Magnetar adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 (Nothing pending at this writing.)
 
+## [0.4.2] — 2026-05-21 — THBS v1 + Public-BFT-safe aggregate-signatures API
+
+This release introduces TWO new signing modes:
+1. **THBS v1** — true threshold hash-based signatures (McGrew et al.):
+   parties hold secret-shared FORS/WOTS+ elements; for each message they
+   release shares ONLY for the SELECTED elements; combiner reconstructs
+   the final signature; verifier sees an ordinary HBS-style signature.
+   No aggregator-as-TCB. Dealer-backed v1; public DKG = v2; FIPS 205
+   wire-compatibility = v3.
+2. **Aggregate-signatures mode** — public-BFT-safe N-of-N collected
+   signatures (each validator holds its own keypair). This was the
+   originally-planned content of v0.4.2.
+
+### Added
+
+- **`pkg/thbs/`** — TRUE threshold hash-based signatures (McGrew,
+  Fluhrer, Gazdag, Kampanakis, Morton, Westerbaan, IACR ePrint
+  2019/793 / IRTF draft-mcgrew-hash-sigs). Subpackage layout:
+  - `thbs.go` — types per the user-spec API shape (`DKGConfig`,
+    `PublicKey`, `PrivateShare`, `PartialSignature`, `FinalSignature`,
+    `Evidence`, `EquivocationError`).
+  - `dealer.go` — v1 dealer-backed DKG. The dealer Shamir-shares each
+    secret WOTS+ chain head and each FORS secret leaf across the
+    committee via per-byte GF(257). Dealer seed is zeroised before
+    return. v2 will replace with public DKG.
+  - `wots.go` — WOTS+ primitive (Winternitz w=16, FIPS 205-style
+    base-w digit + checksum decomposition; hash chains under
+    cSHAKE-256 with domain-separated slot/chain/position binding).
+  - `fors.go` — FORS primitive (k subtrees, height a, per-leaf
+    binary Merkle paths).
+  - `tree.go` — top-level public Merkle tree over WOTS+ leaf-roots
+    (XMSS-style; v1 single tree, v3 will hypertree).
+  - `slot.go` — anti-equivocation slot guard. Each (party, slot)
+    used at most once; same-slot-different-digest emits Evidence.
+  - `sign.go` — `SignShare` + `Aggregate` + `Verify`. SignShare
+    releases shares for ONLY the selected elements (WOTSChains chain
+    heads + FORSK FORS leaves). Aggregate Lagrange-reconstructs the
+    selected elements (per-element, never a seed). Verify reproduces
+    the public Merkle root from the assembled HBS-style signature.
+  - `shamir.go` — per-byte Shamir over GF(257) tuned for THBS:
+    elements (not seeds) are shared, byte-equal reconstruction is
+    guaranteed because each byte is in [0, 256).
+  - `hash.go` — cSHAKE-256 with the "Magnetar-THBS" function name
+    and per-tag domain separation (chain, leaf, fors-node, share-MAC,
+    dealer-PRF, etc.).
+  - `thbs_test.go` — 24 unit tests pinning every invariant the spec
+    requires: TestTHBS_DKG_NoSeedExposure,
+    TestTHBS_WOTS_ReconstructsOnlySelectedChainValues,
+    TestTHBS_FORS_ReconstructsOnlySelectedLeaves,
+    TestTHBS_Aggregate_FinalSignatureVerifies,
+    TestTHBS_Aggregate_NoFutureSigningMaterial,
+    TestTHBS_AntiEquivocation_DetectsDoubleSign,
+    TestTHBS_Threshold_TminusOne_Fails,
+    TestTHBS_Threshold_T_Succeeds,
+    TestTHBS_DifferentQuorumsSameSignature,
+    TestTHBS_RejectsTamperedShare,
+    TestTHBS_RejectsCrossSlotShare,
+    TestTHBS_RejectsInconsistentDigest,
+    TestTHBS_RejectsWrongMessageVerify, plus 11 supporting tests.
+- **`THBS-SPEC.md`** — honest v1 scope (dealer-backed, helper data,
+  custom HBS verifier), the v2 (public DKG) and v3 (FIPS 205
+  byte-compatibility) roadmaps, and the McGrew et al. citation.
+- **`pkg/magnetar/aggregate.go`** — public-BFT-safe N-of-N
+  collected-signatures API. Each validator holds its OWN
+  SLH-DSA keypair (no DKG, no shared seed). Construction
+  primitives:
+  - `GenerateValidatorKey(params, rng) → (sk, pk)` — per-validator
+    standalone keypair.
+  - `SignBundle(params, sk, validatorID, msg) → *SignedBundle` —
+    single-validator sign producing a wire envelope.
+  - `VerifyBundle(params, bundle, msg) → bool` — single-validator
+    verify against the embedded public key.
+  - `AggregateSignatures(params, bundles, msg) → *AggregatedSignature` —
+    collects N bundles, dedupes by ValidatorID, shape-checks.
+  - `VerifyAggregated(params, agg, knownValidators) → (count, err)` —
+    per-bundle verify with parallel-CPU dispatch; returns the count
+    of valid signers (policy decision lives at the consumer).
+  - Parallel-CPU dispatch mirrors `luxfi/crypto/slhdsa.VerifyBatch`
+    goroutine fork-join pattern. `LastVerifyAggregatedTier()`
+    exposes the dispatch provenance for the BatchVerify test.
+- **`pkg/magnetar/aggregate_test.go`** — 10 tests covering single-
+  validator round-trip, 5-of-5 aggregation, bad-signature-counted-
+  out (not fatal), unknown-validator rejection, duplicate-validator
+  dedupe, pubkey-mismatch rejection, BatchVerify provenance (asserts
+  parallel-CPU dispatch on a 5-bundle batch), empty-bundle / shape-
+  check fail-fast cases, and per-validator key independence.
+
+### Changed
+
+- **`pkg/magnetar/combine.go`** — `Combine` renamed to
+  `CombineWithSeedReconstruction` to make the TEE requirement
+  explicit in the API. Docstring updated to scream "REQUIRES TEE
+  for public deployment. NOT public-BFT-safe. For public BFT, use
+  AggregateSignatures." The function's existing implementation is
+  preserved byte-for-byte (used by M-Chain custody where TEE is in
+  the TCB; KAT byte-equality is preserved). File header cites
+  Cozzo-Smart 2019 / Bonte-Smart-Tan 2023 / FIPS 205 §6 as the
+  impossibility argument that motivates the rename.
+- **All in-package call sites** — `e2e_test.go`, `threshold_test.go`,
+  `n1_byte_equality_test.go`, `fuzz_test.go`,
+  `ref/go/cmd/genkat/main.go`, `ct/dudect/combine_ct.go` — updated to
+  the new name. KAT vectors are byte-identical (the function body
+  did not change).
+- **`pkg/magnetar/doc.go`** — package docstring rewritten to lead
+  with the two-mode chooser and explain the impossibility argument
+  for why `CombineWithSeedReconstruction` requires TEE.
+- **`DEPLOYMENT-RUNBOOK.md`** — added §0 "Choose your mode"
+  decision tree and §10 "Public-BFT aggregate mode" documenting the
+  new API. §1 retitled to scope the v0.1 reveal-and-aggregate
+  caveat explicitly to `CombineWithSeedReconstruction`.
+
+### Why this matters
+
+SLH-DSA (FIPS 205) is hash-based — WOTS+, FORS, and Merkle
+hypertrees over a secret seed. The literature (Cozzo-Smart 2019,
+Bonte-Smart-Tan 2023, NIST IR 8214) establishes that there is no
+efficient threshold MPC that produces a single FIPS 205-shaped
+signature without reconstructing the master seed. The Magnetar v0.1
+`CombineWithSeedReconstruction` path embraces this: byte-equality
+with single-party FIPS 205 is the headline N1 claim, but the cost
+is that the aggregator host is in the TCB for the brief
+seed-reconstruction window.
+
+For Lux's public-BFT validator quorum, that TCB requirement is too
+strong — no individual validator host should be trusted with the
+group seed. The `AggregateSignatures` path is the honest SOTA
+answer: each validator signs independently, the consensus layer
+collects N signatures, verification iterates per-signer. Wire size
+grows linearly with N (compressible via a Z-Chain Groth16 rollup to
+~192 bytes, a separate primitive). This release does not change the
+custody story — M-Chain thresholdvm in TEE-attested mode continues
+to use `CombineWithSeedReconstruction`. It adds the public-BFT path
+that was previously missing.
+
 ## [0.3.0] — 2026-05-18 — Tier A documentation shape complete
 
 The full 12-document Tier A submission package shape now ships,
