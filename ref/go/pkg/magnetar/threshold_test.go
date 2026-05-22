@@ -45,9 +45,9 @@ func TestThreshold_BasicSign(t *testing.T) {
 		}
 		r2[i] = m
 	}
-	sig, err := Combine(params, pub, msg, nil, false, sid, attempt, quorum, 2, r1, r2, shares)
+	sig, err := CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, attempt, quorum, 2, r1, r2, shares)
 	if err != nil {
-		t.Fatalf("Combine: %v", err)
+		t.Fatalf("CombineWithSeedReconstruction: %v", err)
 	}
 	if err := Verify(params, pub, msg, sig); err != nil {
 		t.Fatalf("Verify: %v", err)
@@ -108,8 +108,8 @@ func TestThreshold_TamperedRound2Rejected(t *testing.T) {
 	}
 	// Tamper: flip a bit in r2[0]'s mask half.
 	r2[0].PartialSig[0] ^= 0x01
-	if _, err := Combine(params, pub, msg, nil, false, sid, 1, quorum, 2, r1, r2, shares); err == nil {
-		t.Fatalf("Combine accepted tampered Round-2 reveal")
+	if _, err := CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, 1, quorum, 2, r1, r2, shares); err == nil {
+		t.Fatalf("CombineWithSeedReconstruction accepted tampered Round-2 reveal")
 	}
 }
 
@@ -138,9 +138,9 @@ func TestThreshold_SessionMismatchRejected(t *testing.T) {
 	for i, s := range signers {
 		r2[i], _, _ = s.Round2(r1)
 	}
-	// Combine with sid2: must fail.
-	if _, err := Combine(params, pub, msg, nil, false, sid2, 1, quorum, 2, r1, r2, shares); err == nil {
-		t.Fatalf("Combine accepted mismatched session ID")
+	// CombineWithSeedReconstruction with sid2: must fail.
+	if _, err := CombineWithSeedReconstruction(params, pub, msg, nil, false, sid2, 1, quorum, 2, r1, r2, shares); err == nil {
+		t.Fatalf("CombineWithSeedReconstruction accepted mismatched session ID")
 	}
 }
 
@@ -202,5 +202,5 @@ func signWithQuorum(t *testing.T, params *Params, pub *PublicKey, shares []*KeyS
 		}
 		r2[i] = m
 	}
-	return Combine(params, pub, msg, nil, false, sid, attempt, quorum, threshold, r1, r2, shares)
+	return CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, attempt, quorum, threshold, r1, r2, shares)
 }

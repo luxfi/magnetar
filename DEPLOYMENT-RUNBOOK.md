@@ -1,17 +1,88 @@
-# Magnetar v0.1 — Deployment runbook
+# Magnetar — Deployment runbook
 
 > Operator-facing trust-model disclosure and hardening guidance for
-> Magnetar v0.1. **READ THIS BEFORE DEPLOYING.**
+> Magnetar. **READ THIS BEFORE DEPLOYING.**
 
-## 1. v0.1 reveal-and-aggregate trust caveat — single biggest disclosure
+## 0. Choose your mode — the most important decision
 
-**The Magnetar v0.1 aggregator process holds the reconstructed master SLH-DSA seed in memory for the duration of one `Combine` call.**
+Magnetar ships **two distinct signing modes** with different trust
+models. Picking the wrong one is the single largest deployment risk.
 
-This is the v0.1 reveal-and-aggregate trust model. It is identical to Pulsar's v0.1 reveal-and-aggregate trust model. The construction is **honest** about this: the security properties below are precisely what v0.1 delivers, and the path to v0.2 (true MPC, aggregator never sees the seed) is in `BLOCKERS.md`.
+| Property | `AggregateSignatures` (public-BFT) | `CombineWithSeedReconstruction` (custody) |
+|---|---|---|
+| Output | N separate FIPS 205 signatures | One FIPS 205 signature |
+| Aggregator-as-TCB | NO (no party holds the master seed) | YES (master seed live in aggregator) |
+| Public-BFT-safe | YES | NO — requires TEE |
+| Validator key model | Per-validator, independent keypairs | Shared via DKG + Shamir-split seed |
+| DKG required | NO | YES |
+| Wire size | N × \|σ\| (e.g. 21 × 16 KiB = 336 KiB at L3) | \|σ\| (16 KiB at L3) |
+| Z-Chain Groth16-compressible | YES (~192 B proof) | N/A (already 1 σ) |
+| Module | `aggregate.go` | `combine.go` |
+| File | `ref/go/pkg/magnetar/aggregate.go` | `ref/go/pkg/magnetar/combine.go` |
+| Use case | Lux public-BFT validator quorum | M-Chain custody w/ TEE attestation |
+
+### Decision tree
+
+```
+                    ┌──────────────────────────────────┐
+                    │  Who needs to verify the σ?      │
+                    └──────────────────────────────────┘
+                                  │
+              ┌───────────────────┴───────────────────┐
+              │                                       │
+        Public, untrusted                       Internal,
+        verifiers (BFT chain,                   pre-attested
+        external relayers, etc.)                 TCB
+              │                                       │
+              ▼                                       ▼
+   ┌─────────────────────┐                ┌─────────────────────┐
+   │ AggregateSignatures │                │ Is an aggregator    │
+   │   (public-BFT)      │                │ host attested by TEE│
+   │                     │                │ (TDX/SEV-SNP/SGX) ? │
+   │ + Z-Chain Groth16   │                └─────────────────────┘
+   │   rollup for size   │                          │
+   │   compression       │           ┌──────────────┴──────────────┐
+   └─────────────────────┘           │                             │
+                                    YES                           NO
+                                     │                             │
+                                     ▼                             ▼
+                            ┌─────────────────────┐    ┌─────────────────────┐
+                            │ CombineWithSeed-    │    │ AggregateSignatures │
+                            │ Reconstruction      │    │ — do NOT use Combine│
+                            │ (custody / M-Chain) │    │ WithSeedReconstr.   │
+                            └─────────────────────┘    │ outside TEE!        │
+                                                       └─────────────────────┘
+```
+
+### TL;DR
+- **PUBLIC BFT** (validator quorum, untrusted aggregator host) →
+  `AggregateSignatures` (N separate sigs). See §10.
+- **M-CHAIN CUSTODY with TEE** (M-Chain thresholdvm host with
+  TDX/SEV-SNP/SGX attestation) → `CombineWithSeedReconstruction`.
+  Trust caveat in §1 applies — operator MUST enforce the §1 mitigations.
+- **Anything else** → `AggregateSignatures`. The reveal-and-aggregate
+  path is NOT safe for public deployments.
+
+## 1. `CombineWithSeedReconstruction` (v0.1 reveal-and-aggregate) trust caveat
+
+**The Magnetar `CombineWithSeedReconstruction` aggregator process holds the reconstructed master SLH-DSA seed in memory for the duration of one call.**
+
+This is the v0.1 reveal-and-aggregate trust model. It is identical to Pulsar's v0.1 reveal-and-aggregate trust model. The construction is **honest** about this: the security properties below are precisely what `CombineWithSeedReconstruction` delivers, and the path to v0.2 (true MPC, aggregator never sees the seed) is in `BLOCKERS.md`.
+
+**Why this is fundamental, not a Magnetar choice:**
+
+SLH-DSA (FIPS 205) is hash-based. The literature confirms there is *no efficient threshold MPC* that produces a single FIPS 205-shaped signature without reconstructing the master seed:
+
+- Cozzo & Smart, "Sharing the LUOV" (EUROCRYPT 2019) — establishes that hash-based signatures are MPC-hard.
+- Bonte, Smart, Tan, "Threshold SPHINCS+" (2023) — exhaustive infeasibility analysis.
+- NIST IR 8214 / MPTC submission notes — SLH-DSA classified as "highest threshold-MPC cost" among the FIPS 20{3,4,5} family.
+- FIPS 205 §6 SLH-DSA-Sign-Internal — direct inspection confirms no Lagrange-aggregatable response in the algorithm.
+
+If you cannot trust the aggregator host as TCB, use `AggregateSignatures` instead (see §0 and §10). That mode replaces "reconstruct the seed" with "collect N separate signatures" and is the SOTA answer for public-BFT post-quantum finality on SLH-DSA.
 
 ### What this means operationally
 
-During a `Combine` call (typically ≤100 ms for SHAKE-192s on commodity hardware), the following secret material is live in the aggregator process's address space:
+During a `CombineWithSeedReconstruction` call (typically ≤100 ms for SHAKE-192s on commodity hardware), the following secret material is live in the aggregator process's address space:
 
 | Buffer | Lifetime | Wiped by |
 |---|---|---|
@@ -51,7 +122,7 @@ The Pulsar v0.1 deployment runbook mandates **TEE + mlock + ptrace-off** as the 
 
 ## 2. Aggregator role assignment
 
-Any party in the quorum (or an external third-party aggregator) can call `Combine`. The protocol does not assume a specific aggregator; the aggregator's identity is not bound into the signature.
+Any party in the quorum (or an external third-party aggregator) can call `CombineWithSeedReconstruction`. The protocol does not assume a specific aggregator; the aggregator's identity is not bound into the signature.
 
 **Recommendation:** rotate aggregator role across signing requests to minimise the seed-exposure window on any single host. A leader-rotation pattern over committee members (round-robin keyed by `session_id`) is a reasonable v0.1 default.
 
@@ -102,11 +173,56 @@ Operators deploying Magnetar v0.1 do so at their own risk and SHOULD layer it wi
 - `SUBMISSION-STATUS.md` — NIST MPTC submission status
 - [`luxfi/pulsar/DEPLOYMENT-RUNBOOK.md`](https://github.com/luxfi/pulsar/blob/main/DEPLOYMENT-RUNBOOK.md) — sibling runbook for the threshold M-LWE primitive
 
+## 10. Public-BFT aggregate mode (`AggregateSignatures`)
+
+The aggregate mode is the **public-BFT-safe path** for using Magnetar in a validator quorum. It does NOT require the aggregator to be in the TCB and does NOT rely on the reveal-and-aggregate construction. This is the path you SHOULD pick unless §0's decision tree points elsewhere.
+
+### Construction summary
+
+1. **Per-validator keygen** (one-time, off-chain): each validator `i` independently runs `GenerateValidatorKey(params, rng)` to produce its own (sk_i, pk_i). No DKG, no shared seed, no resharing ceremony. The validator-set registry binds `(ValidatorID_i, pk_i)` so peers can verify this validator's signatures.
+
+2. **Per-validator sign** (one signature per block): each validator `i` calls `SignBundle(params, sk_i, ValidatorID_i, message)` to produce a `SignedBundle{ValidatorID, PublicKey, Signature}`. The signature is FIPS 205-byte-identical (no envelope) and verifies under unmodified `slhdsa.Verify`.
+
+3. **Aggregate** (consensus layer): the consensus layer collects N `SignedBundle` envelopes from the network, then calls `AggregateSignatures(params, bundles, message)` to dedupe + shape-check and produce a wire-stable `AggregatedSignature{Message, Bundles}`.
+
+4. **Verify** (relying party): a verifier calls `VerifyAggregated(params, agg, knownValidators)` which returns the COUNT of valid signers. The verifier compares the count against its quorum threshold to make the policy decision.
+
+### Honest trade-offs
+
+- **Wire size grows linearly with N.** At SLH-DSA-SHAKE-192s (16,224 byte signature) a 21-validator quorum is 336 KiB; a 64-validator quorum is 1 MiB. This is the cost of being TCB-free.
+- **Verification cost grows linearly with N.** Each bundle requires one full FIPS 205 verify (~50ms per signature on M1 Max for SHAKE-192s). For N=21 that's ~1s in the serial path. `VerifyAggregated` automatically forks to `GOMAXPROCS` goroutines above `verifyAggregatedConcurrentThreshold=2` (mirrors `luxfi/crypto/slhdsa.VerifyBatch` parallel path), reducing wall-clock to ~125ms on an 8-core machine. The GPU substrate at `luxfi/crypto/slhdsa.VerifyBatch` brings this further down when an accel device is loaded — embed magnetar bundles in that path for upper-bound throughput.
+- **Z-Chain Groth16 rollup is a separate primitive.** A Groth16 SNARK over the FIPS 205 verify circuit can compress the N-signature bundle to ~192 bytes. This is NOT part of the magnetar API; see `lux-zchain` for the rollup spec. The rollup does NOT change Magnetar's correctness — it's a post-hoc compression layer that the relying party can choose to consume instead of the raw N-bundle envelope.
+
+### Security model
+
+| Property | `AggregateSignatures` | Notes |
+|---|---|---|
+| **Unforgeability** | FIPS 205-grade per signer | Each σ_i is a standard FIPS 205 signature; forgery reduces to the FIPS 205 EUF-CMA assumption per signer. |
+| **No single-host TCB** | Yes | No party ever holds N validators' secret material together. Compromising one validator host leaks ONE sk_i, not the group key. |
+| **Quorum byzantine tolerance** | Yes (consensus-layer policy) | The count returned by `VerifyAggregated` is compared against the consensus threshold (e.g. 2f+1 for f Byzantine faults). |
+| **Per-validator slashing** | Yes | Each σ_i is independently attributable to ValidatorID_i; the consensus layer can publish proof-of-double-sign on (ValidatorID_i, σ_a, σ_b, m_a, m_b). |
+| **Post-quantum hardness** | FIPS 205 (~192-bit at SHAKE-192s) | All N signatures use the SAME FIPS 205 parameter set; no hybrid weakening. |
+| **Replay resistance** | Per-signer ctx string | Use the `ctx` argument to bind chain-id / block-height into each σ_i (currently `SignBundle` passes nil; v0.4.3 will add a ctx parameter). |
+
+### Operational checklist
+
+- [ ] Generate each validator's keypair on the validator host with a hardware RNG. NEVER share sk_i across hosts.
+- [ ] Encrypt sk_i at rest with a host-bound key (TPM-sealed or KMS-wrapped). NEVER write sk_i to disk in plaintext.
+- [ ] Publish (ValidatorID_i, pk_i) to the validator-set registry via the same on-chain registration flow you'd use for classical BLS validators.
+- [ ] The consensus layer SHOULD parallelize verify by routing `AggregatedSignature.Bundles` through `luxfi/crypto/slhdsa.VerifyBatch` for GPU substrate acceleration (see `crypto/slhdsa/gpu.go`).
+- [ ] On Byzantine fault detection (double-sign, ValidatorID-pk mismatch via `ErrValidatorPubkeyMismatch`), produce slashing evidence at the consensus layer. `VerifyAggregated` returns typed errors so the slashing decision can be made deterministically.
+
+### Honest non-warranties
+
+- **No formal proof** of the aggregate construction beyond FIPS 205's per-signature security. The aggregate construction is a thin layer over N independent FIPS 205 signatures — its security argument is "N × FIPS 205 EUF-CMA", which is sufficient but not separately formalized in EasyCrypt/Lean.
+- **No dudect on `VerifyAggregated`.** The function dispatches over per-validator data which is public (NodeID + PublicKey are network-observable). The signature verify call inherits the dudect coverage of single-party FIPS 205 verify (covered by upstream `slhdsa.Verify` constant-time analysis where applicable; CT is NOT a load-bearing property here since all inputs are public).
+- **No Groth16 verifier ships in this package.** The Z-Chain rollup is a separate primitive — magnetar produces the input to it but does not consume or verify the proof.
+
 ---
 
 **Document metadata**
 
 - File: `DEPLOYMENT-RUNBOOK.md`
-- Version: v0.1
-- Date: 2026-05-18
+- Version: v0.4.2 (adds §0 mode chooser + §10 aggregate mode; renames §1 to `CombineWithSeedReconstruction`)
+- Date: 2026-05-21
 - Status: operator-facing trust-model disclosure

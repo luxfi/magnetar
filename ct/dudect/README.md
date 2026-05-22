@@ -9,7 +9,7 @@ Verify and Combine paths.
 | Target | What it tests | Operationally-meaningful CT? |
 |---|---|---|
 | `dudect_verify` | `magnetar.Verify(pk, msg, ctx, sig)` over a pool of VALID signatures | Yes — `Verify` is the consensus-consumer hot path; CT means an attacker can't extract sig content from timing |
-| `dudect_combine` | `magnetar.Combine(...)` over a pool of VALID Round-1+Round-2 tapes (independent ceremonies over the SAME shares; all produce the SAME final signature) | Yes — Combine reconstructs the master seed in memory; CT means the seed value can't influence the leakage trace |
+| `dudect_combine` | `magnetar.CombineWithSeedReconstruction(...)` over a pool of VALID Round-1+Round-2 tapes (independent ceremonies over the SAME shares; all produce the SAME final signature) | Yes — CombineWithSeedReconstruction reconstructs the master seed in memory; CT means the seed value can't influence the leakage trace |
 
 The valid-pool design is the same operationally-meaningful CT
 framing Pulsar uses (`~/work/lux/pulsar/ct/dudect/`). Earlier

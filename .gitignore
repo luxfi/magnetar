@@ -8,6 +8,10 @@ vectors-tmp/
 *.swp
 *~
 
+# Local-build artefacts
+/genkat
+/ct/dudect/combine_ct
+
 # EC theory shells admit-closed at v0.4.0 (admit 0/0 across 13 EC
 # files mirroring Pulsar v1.0.7 reference). proofs/ now tracked.
 
