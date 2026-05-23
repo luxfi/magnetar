@@ -1,12 +1,42 @@
-# Magnetar — Threshold SLH-DSA (FIPS 205)
+# Magnetar — SLH-DSA (FIPS 205) for Lux Public-BFT
 
-> **Tier A documentation shape complete at v0.3.0; public-BFT-safe aggregate mode + THBS v1 added at v0.4.2.**
-> Threshold hash-based PQ signature primitive over FIPS 205 SLH-DSA
-> shipping **three modes**: `pkg/thbs.Aggregate` (TRUE threshold —
-> McGrew et al., selected-elements reconstruction, no aggregator-in-TCB;
-> v1 dealer-backed, see `THBS-SPEC.md`), `AggregateSignatures`
-> (public-BFT-safe N-of-N collected signatures), and
-> `CombineWithSeedReconstruction` (reveal-and-aggregate; requires TEE).
+## Public-BFT default: `magnetar.ValidatorSign` + `magnetar.VerifyAggregateCert`
+
+For PUBLIC-BFT consensus on Lux L1/L2 (mainnet, testnet, devnet,
+white-label chains) use the per-validator standalone primitive at
+`ref/go/pkg/magnetar/standalone.go`:
+
+```go
+sk, pk, _ := magnetar.PerValidatorKeypair(params, rng)
+sig, _    := magnetar.ValidatorSign(sk, rng, message)
+// ... collected at the consensus layer ...
+cert, _   := magnetar.BuildAggregateCert(params, signers, pubkeys, sigs)
+valid, _  := magnetar.VerifyAggregateCert(cert, message, knownValidators)
+```
+
+**Why per-validator instead of threshold?** SLH-DSA is hash-based;
+it has no algebraic structure (Cozzo-Smart Eurocrypt 2019;
+Bonte-Smart-Tan 2023 "Threshold SPHINCS+"). True threshold SLH-DSA
+without a trusted dealer is research-grade (multi-month MPC-over-SHA
+work). For public BFT the architecturally correct pattern is N
+validators × standalone sigs, compressed by the consensus layer
+(QuasarCert + Z-Chain Groth16 rollup → ~192 bytes), mirroring the
+`MLDSAProof` field for ML-DSA.
+
+The threshold modes below exist for NON-public scenarios where a
+dealer or TEE is in the TCB by deployment policy (M-Chain bridge
+custody, A-Chain confidential compute).
+
+---
+
+> **Tier A documentation shape complete at v0.3.0; public-BFT-safe aggregate mode + THBS v1 added at v0.4.2; standalone-primary framing + dkg2 PVSS skeleton at v0.5.0.**
+> Hash-based PQ signature primitive over FIPS 205 SLH-DSA shipping
+> **four modes**:
+> 1. `ValidatorSign` + `VerifyAggregateCert` — **PUBLIC-BFT PRIMARY** (per-validator standalone, no DKG, no dealer)
+> 2. `pkg/thbs.DealerDKG` + `SignShare` + `Aggregate` — TRUE threshold HBS, McGrew et al. selected-elements reconstruction; v1 **dealer-backed**, NOT public-BFT-safe; for M-Chain custody
+> 3. `CombineWithSeedReconstruction` — reveal-and-aggregate; requires TEE; for M-Chain custody
+> 4. `pkg/thbs/dkg2` — SKELETON of public PVSS-based DKG; MPC-root layer is open research; v0.6+ candidate; **NOT production today**
+>
 > The full 12-document Tier A submission package shape (mirroring
 > Pulsar's structure) is now in-tree; mechanized refinement, dudect
 > statistical CT validation, v0.4 lifecycle additions (ML-KEM
