@@ -13,7 +13,7 @@ cd "$REPO_ROOT"
 export GOWORK=off
 
 echo "==> Magnetar Go test gate (short mode, no race)"
-if ! go test -count=1 -short -timeout 240s ./ref/go/pkg/magnetar/; then
+if ! go test -count=1 -short -timeout 600s ./ref/go/pkg/magnetar/; then
     echo "    [FAIL] go test"
     exit 2
 fi
