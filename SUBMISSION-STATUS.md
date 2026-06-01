@@ -1,4 +1,11 @@
-# NIST MPTC Submission Status — Magnetar
+# NIST MPTC Submission Status --- Magnetar
+
+> **v1.0 framing.** This document is a v0.x archival snapshot. The
+> v1.0 submission shape ports to the THBS-SE construction and the
+> per-validator standalone primitive; the v0.x reveal-and-aggregate
+> path described below has been removed from the codebase. See
+> `CHANGELOG.md::[1.0.0]` for the load-bearing deletions and the
+> v1.0 construction surface.
 
 > Honest status of Magnetar's path to NIST Multi-Party Threshold
 > Cryptography submission. **Tier A documentation shape complete**

@@ -1,4 +1,10 @@
-# Magnetar — Public-DKG MPC Threshold SLH-DSA (research profile)
+# Magnetar --- Public-DKG MPC Threshold SLH-DSA (research profile)
+
+> **v1.0 framing.** This document is a v0.x research-profile design
+> snapshot. The v1.0 production THBS-SE construction
+> (`THBS-SPEC.md`) is the closer of "permissionless threshold SLH-DSA
+> without TEE" for Magnetar; the v1.1 strict-atom-assembly path is
+> the strict-invariant closer (`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`).
 
 > **Tier 3 of the Hanzo PQ Threshold Suite.** Research-track
 > construction for threshold FIPS 205 SLH-DSA via MPC. **NOT
