@@ -3,22 +3,25 @@
 
 package magnetar
 
-// params.go — concrete parameter sets for Magnetar and the canonical
-// Mode -> Params resolution. Magnetar instantiates threshold SLH-DSA
-// over the FIPS 205 parameter sets defined in NIST FIPS 205 §10.1
-// Table 2.
+// params.go --- concrete parameter sets for Magnetar and the canonical
+// Mode -> Params resolution. Magnetar instantiates FIPS 205 SLH-DSA at
+// the parameter sets defined in NIST FIPS 205 sec 10.1 Table 2.
 //
-// The v0.1 reveal-and-aggregate construction shares the 4n-byte
-// SLH-DSA scheme seed (the input to slhdsa.Scheme().DeriveKey) via
-// byte-wise Shamir secret sharing over GF(257). On Combine the seed
-// is reconstructed in aggregator memory, fed to the single-party
-// FIPS 205 SignDeterministic, and zeroized. The resulting signature
-// is byte-identical to single-party SLH-DSA on the same (seed, msg,
-// ctx) — this is the Magnetar analog of Pulsar's Class N1 claim.
+// Both Magnetar primitives consume Params identically:
 //
-// The v0.1 honest trust caveat: the aggregator process is TCB for
-// the brief window the master seed is reconstructed. See SPEC.md
-// "Trust model" and DEPLOYMENT-RUNBOOK.md.
+//   - The per-validator standalone primitive (standalone.go) uses
+//     Params to size single-party SLH-DSA keys, messages, and
+//     signatures. No threshold field math.
+//
+//   - THBS-SE (thbsse.go) uses Params for the same SLH-DSA sizes
+//     PLUS uses SeedSize as the byte length sized for the GF(257)
+//     byte-wise Shamir share envelope (see thbsse_field.go for the
+//     PUBLIC-COMBINER share arithmetic).
+//
+// The signature payloads emitted by both primitives are byte-identical
+// to single-party FIPS 205 SignDeterministic on the same (seed, msg,
+// ctx) tuple --- the Magnetar wire codec adds no envelope to the inner
+// SLH-DSA bytes, only the canonical 11-byte MAGS/MAGG frame.
 
 import (
 	"errors"
@@ -98,28 +101,19 @@ type Params struct {
 	// ID is the circl/slhdsa identifier this Mode dispatches to.
 	// Centralising the mapping makes the dispatch table auditable.
 	ID slhdsa.ID
-
-	// ShamirPrime is the small prime over which per-byte Shamir
-	// shares of the SLH-DSA seed are computed. 257 matches the
-	// Pulsar choice: smallest prime > 255, admits every byte as a
-	// distinct GF element, gives 9-bit shares packed as one uint16
-	// per byte.
-	ShamirPrime uint32
 }
 
 // SeedSize is the byte length of an SLH-DSA scheme seed for the
 // recommended SHAKE-192s mode. Other modes have different seed
-// sizes — callers MUST use params.SeedSize, not this constant, for
+// sizes --- callers MUST use params.SeedSize, not this constant, for
 // non-192s code paths. Provided as a const for KAT generators that
 // pin to the recommended mode.
 const SeedSize = 96
 
-// MaxCommittee257 is the maximum committee size under byte-wise
-// Shamir over GF(257). 256 is exactly q-1 = 257-1, the upper bound
-// on distinct non-zero evaluation points.
-const MaxCommittee257 = 256
+// MaxCommittee257 is defined in thbsse_field.go (the THBS-SE
+// construction is the only consumer of byte-wise GF(257) shares).
 
-// Hard-coded parameter tables per FIPS 205 §10.1 Table 2.
+// Hard-coded parameter tables per FIPS 205 sec 10.1 Table 2.
 
 // ParamsM192s is the Magnetar SHAKE-192s parameter set (recommended).
 var ParamsM192s = &Params{
@@ -130,7 +124,6 @@ var ParamsM192s = &Params{
 	SignatureSize:  16224,
 	SeedSize:       96,
 	ID:             slhdsa.SHAKE_192s,
-	ShamirPrime:    257,
 }
 
 // ParamsM192f is the Magnetar SHAKE-192f parameter set.
@@ -142,7 +135,6 @@ var ParamsM192f = &Params{
 	SignatureSize:  35664,
 	SeedSize:       96,
 	ID:             slhdsa.SHAKE_192f,
-	ShamirPrime:    257,
 }
 
 // ParamsM256s is the Magnetar SHAKE-256s parameter set.
@@ -154,7 +146,6 @@ var ParamsM256s = &Params{
 	SignatureSize:  29792,
 	SeedSize:       128,
 	ID:             slhdsa.SHAKE_256s,
-	ShamirPrime:    257,
 }
 
 // ParamsFor returns the canonical Params for the given Mode.

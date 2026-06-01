@@ -3,16 +3,16 @@
 
 package magnetar
 
-// sign.go — single-party signing. The single-party path is the
-// reference baseline for the threshold path in threshold.go: a
-// threshold quorum that successfully completes its rounds emits a
-// Signature byte-identical to single-party Sign on the same
-// reconstructed seed.
+// sign.go --- single-party signing. The single-party path is consumed
+// by both the per-validator standalone primitive (ValidatorSign in
+// standalone.go) and by the THBS-SE PUBLIC COMBINER (Combine in
+// thbsse.go), via slhSignDeterministic. Each consumer routes through
+// circl/slhdsa as the FIPS 205 signing primitive.
 //
-// This file uses circl/slhdsa as the FIPS 205 signing primitive.
-// The threshold layer above does not depend on internals; it
-// depends only on (i) seed-based key derivation matching DeriveKey
-// and (ii) the output being a valid FIPS 205 signature.
+// The THBS-SE byte-identity claim rides on FIPS 205 SignDeterministic
+// being a pure function of (sk, message, ctx): a public combiner that
+// reconstructs the same scheme seed and routes through this Sign call
+// emits the same wire bytes any FIPS 205 verifier accepts.
 
 import (
 	"crypto/rand"
@@ -76,9 +76,11 @@ func SignCtx(params *Params, sk *PrivateKey, message, ctx []byte, randomized boo
 // SignRandomized adds a fresh n-byte randomness from the supplied
 // reader; with a deterministic reader it remains reproducible.
 //
-// The threshold-Combine path uses randomized=false to guarantee
-// byte-identical output to the single-party reference (this is the
-// Magnetar analog of Pulsar's Class N1).
+// THBS-SE always uses randomized=false (via slhSignDeterministic in
+// thbsse.go) to guarantee byte-identity: any t valid Round-2 reveals
+// produce the same final signature, so the PUBLIC COMBINER is a pure
+// function of its inputs and disjoint sub-quora produce the same wire
+// bytes.
 func slhSign(id slhdsa.ID, packedSk, message, ctx []byte, randomized bool, rng io.Reader) ([]byte, error) {
 	priv := slhdsa.PrivateKey{ID: id}
 	if err := priv.UnmarshalBinary(packedSk); err != nil {

@@ -2,13 +2,16 @@
 // See the file LICENSE for licensing terms.
 
 // genkat is the canonical KAT (Known Answer Test) generator for
-// Magnetar. It produces the JSON vector files committed under
-// vectors/ — keygen, sign, verify, threshold-sign, dkg.
+// Magnetar v1.0. It produces the JSON vector files committed
+// under vectors/:
 //
-// Re-running genkat on a clean checkout MUST produce byte-identical
-// output. Drift is a CI failure. The deterministic-fixture gate
-// is validated by re-running this binary and diffing against
-// committed JSON.
+//   - keygen.json   — FIPS 205 single-party keypair derivation
+//   - sign.json     — FIPS 205 single-party SignDeterministic
+//   - verify.json   — FIPS 205 verify (positive + negative)
+//   - thbsse-sign.json — THBS-SE permissionless threshold sign
+//
+// Re-running genkat on a clean checkout MUST produce byte-
+// identical output. Drift is a CI failure.
 package main
 
 import (
@@ -24,8 +27,7 @@ import (
 )
 
 // masterSeedHex is the head-of-file 48-byte seed from which every
-// KAT in the file is reproducible. Re-running genkat with the same
-// masterSeed gives bit-identical output.
+// KAT in the file is reproducible.
 const masterSeedHex = "f1a5c98e2d40e9b7a3f87216d4ca09fbb6e51d75c7e3a920" +
 	"4f3c1aab83de2f08e1d5b4a1c8f6b9e6743a298e7062a5c4"
 
@@ -53,30 +55,31 @@ type VerifyKAT struct {
 	Valid     bool   `json:"valid"`
 }
 
-type ThresholdSignKAT struct {
-	Mode      string   `json:"mode"`
-	N         int      `json:"n"`
-	T         int      `json:"t"`
-	Message   string   `json:"message"`
-	PublicKey string   `json:"public_key"`
-	Signature string   `json:"signature"`
-	Quorum    []string `json:"quorum"`
-	SessionID string   `json:"session_id"`
-	Attempt   uint32   `json:"attempt"`
-}
-
-type DKGKAT struct {
-	Mode           string   `json:"mode"`
-	N              int      `json:"n"`
-	T              int      `json:"t"`
-	Committee      []string `json:"committee"`
-	PublicKey      string   `json:"public_key"`
-	TranscriptHash string   `json:"transcript_hash"`
-	Shares         []string `json:"shares"` // per-party packed share (seed_size×2 bytes hex)
+// ThbsSeSignKAT mirrors the kat_test.go katThbsSe shape: a
+// (n, t) committee deterministically derived from SetupSeed, a
+// slot binding, a message, and the resulting (group pk, σ)
+// pair. Byte-identical to what stock FIPS 205 SignDeterministic
+// emits on the master seed under ctx = ctxFromSlot(binding).
+type ThbsSeSignKAT struct {
+	Mode          string   `json:"mode"`
+	N             int      `json:"n"`
+	T             int      `json:"t"`
+	SetupSeed     string   `json:"setup_seed"`
+	Committee     []string `json:"committee"`
+	ChainID       string   `json:"chain_id"`
+	Epoch         uint64   `json:"epoch"`
+	Slot          uint64   `json:"slot"`
+	Height        uint64   `json:"height"`
+	CommitteeID   string   `json:"committee_id"`
+	MessageDomain string   `json:"message_domain"`
+	Message       string   `json:"message"`
+	PublicKey     string   `json:"public_key"`
+	Signature     string   `json:"signature"`
 }
 
 // detReader is a deterministic byte stream from a seed via
-// SHA-256 chaining. Identical layout to Pulsar's genkat detReader.
+// SHA-256 chaining. Layout matches the magnetar package test
+// helper so KATs reproduce across the cmd/test boundary.
 type detReader struct {
 	seed []byte
 	buf  []byte
@@ -203,90 +206,91 @@ func main() {
 	}
 	writeJSON(filepath.Join(*outDir, "verify.json"), verifyKATs)
 
-	// ---- threshold-sign ---- (only ModeM192s for KAT brevity;
-	// SHAKE-192s is the recommended mode and the only one
-	// exercised under threshold in v0.1)
-	thresholdKATs := []ThresholdSignKAT{}
-	for _, mode := range []pm.Mode{pm.ModeM192s} {
-		for _, tc := range []struct{ N, T int }{{3, 2}, {5, 3}, {7, 4}} {
-			params := pm.MustParamsFor(mode)
-			committee := makeKATCommittee(tc.N)
-			pub, shares, _ := runKATDKG(params, committee, tc.T, mode, masterSeed)
-			msg := []byte(fmt.Sprintf("Magnetar Threshold KAT %s n=%d t=%d", mode.String(), tc.N, tc.T))
-			quorum := make([]pm.NodeID, tc.T)
-			for i := 0; i < tc.T; i++ {
-				quorum[i] = shares[i].NodeID
-			}
-			var sid [16]byte
-			copy(sid[:], "kat-threshold01")
-			attempt := uint32(1)
-			signers := make([]*pm.ThresholdSigner, tc.T)
-			for i := 0; i < tc.T; i++ {
-				rng := newDetReader(append(masterSeed, []byte{0x30, byte(mode), byte(tc.T), byte(i)}...))
-				signers[i], _ = pm.NewThresholdSigner(params, sid, attempt, quorum, shares[i], msg, rng)
-			}
-			r1 := make([]*pm.Round1Message, tc.T)
-			for i, s := range signers {
-				r1[i], _ = s.Round1()
-			}
-			r2 := make([]*pm.Round2Message, tc.T)
-			for i, s := range signers {
-				r2[i], _, _ = s.Round2(r1)
-			}
-			sig, err := pm.CombineWithSeedReconstruction(params, pub, msg, nil, false, sid, attempt, quorum, tc.T, r1, r2, shares)
-			if err != nil {
-				fail(fmt.Errorf("threshold combine n=%d t=%d: %w", tc.N, tc.T, err))
-			}
-			// Cross-check: verify under unmodified FIPS 205.
-			if err := pm.Verify(params, pub, msg, sig); err != nil {
-				fail(fmt.Errorf("threshold KAT FIPS 205 Verify failed: %w", err))
-			}
-			quorumHex := make([]string, len(quorum))
-			for i, q := range quorum {
-				quorumHex[i] = hex.EncodeToString(q[:])
-			}
-			thresholdKATs = append(thresholdKATs, ThresholdSignKAT{
-				Mode:      mode.String(),
-				N:         tc.N,
-				T:         tc.T,
-				Message:   hex.EncodeToString(msg),
-				PublicKey: hex.EncodeToString(pub.Bytes),
-				Signature: hex.EncodeToString(sig.Bytes),
-				Quorum:    quorumHex,
-				SessionID: hex.EncodeToString(sid[:]),
-				Attempt:   attempt,
-			})
+	// ---- THBS-SE ----
+	//
+	// Spec requirement (user prompt): (n=7, t=4) × 3 SLH-DSA modes
+	// (192s/192f/256s) × 3 distinct messages. Deterministic over
+	// (SetupSeed, slot tuple, message).
+	thbsseKATs := []ThbsSeSignKAT{}
+	for _, mode := range modes {
+		params := pm.MustParamsFor(mode)
+		const N = 7
+		const T = 4
+		committee := makeKATCommittee(N)
+		committeeHex := make([]string, N)
+		for i, c := range committee {
+			committeeHex[i] = hex.EncodeToString(c[:])
 		}
-	}
-	writeJSON(filepath.Join(*outDir, "threshold-sign.json"), thresholdKATs)
+		for msgIdx := 0; msgIdx < 3; msgIdx++ {
+			// SetupSeed pinned per (mode, msgIdx) so KAT
+			// regeneration is deterministic.
+			setupSeed := sha256.Sum256(append(masterSeed,
+				[]byte{0x40, byte(mode), byte(N), byte(T), byte(msgIdx)}...))
+			setupRng := newDetReader(setupSeed[:])
 
-	// ---- dkg ----
-	dkgKATs := []DKGKAT{}
-	for _, mode := range []pm.Mode{pm.ModeM192s} {
-		for _, tc := range []struct{ N, T int }{{3, 2}, {5, 3}, {7, 4}} {
-			params := pm.MustParamsFor(mode)
-			committee := makeKATCommittee(tc.N)
-			pub, shares, transcript := runKATDKG(params, committee, tc.T, mode, masterSeed)
-			committeeHex := make([]string, tc.N)
-			for i, c := range committee {
-				committeeHex[i] = hex.EncodeToString(c[:])
+			key, err := pm.NewThbsSeKey(params, T, committee, setupRng)
+			if err != nil {
+				fail(fmt.Errorf("NewThbsSeKey mode=%s msg=%d: %w", mode, msgIdx, err))
 			}
-			shareHex := make([]string, tc.N)
-			for i, s := range shares {
-				shareHex[i] = hex.EncodeToString(s.Share)
+
+			binding := &pm.ThbsSeSlotBinding{
+				ChainID:       []byte(fmt.Sprintf("lux-magnetar-kat-%s", mode.String())),
+				Epoch:         uint64(7 + msgIdx),
+				Slot:          uint64(101 + 10*msgIdx),
+				Height:        uint64(900 + msgIdx),
+				CommitteeID:   []byte(fmt.Sprintf("kat-ctte-%d", msgIdx)),
+				MessageDomain: []byte("polaris-cert"),
 			}
-			dkgKATs = append(dkgKATs, DKGKAT{
-				Mode:           mode.String(),
-				N:              tc.N,
-				T:              tc.T,
-				Committee:      committeeHex,
-				PublicKey:      hex.EncodeToString(pub.Bytes),
-				TranscriptHash: hex.EncodeToString(transcript[:]),
-				Shares:         shareHex,
+			msg := []byte(fmt.Sprintf(
+				"Magnetar THBS-SE KAT %s n=%d t=%d msg#%d", mode.String(), N, T, msgIdx))
+
+			r1s := make([]pm.ThbsSeRound1Msg, T)
+			r2s := make([]pm.ThbsSeRound2Msg, T)
+			for i := 0; i < T; i++ {
+				guard := pm.NewThbsSeSlotGuard()
+				maskSeed := append([]byte("thbsse-kat-mask-"), append(setupSeed[:], byte(i))...)
+				maskRng := newDetReader(maskSeed)
+				r1, r2, err := pm.ThbsSeRound1(params, key.Shares[i], binding, msg, guard, maskRng)
+				if err != nil {
+					fail(fmt.Errorf("ThbsSeRound1 mode=%s msg=%d i=%d: %w", mode, msgIdx, i, err))
+				}
+				r1s[i] = r1
+				r2s[i] = r2
+			}
+			sig, evidences, err := pm.Combine(pm.ThbsSeCombineInput{
+				Key:     key,
+				Binding: binding,
+				Message: msg,
+				Round1:  r1s,
+				Round2:  r2s,
+			})
+			if err != nil {
+				fail(fmt.Errorf("Combine mode=%s msg=%d: %w", mode, msgIdx, err))
+			}
+			if len(evidences) != 0 {
+				fail(fmt.Errorf("Combine emitted evidences on honest KAT mode=%s msg=%d: %+v",
+					mode, msgIdx, evidences))
+			}
+
+			thbsseKATs = append(thbsseKATs, ThbsSeSignKAT{
+				Mode:          mode.String(),
+				N:             N,
+				T:             T,
+				SetupSeed:     hex.EncodeToString(setupSeed[:]),
+				Committee:     committeeHex,
+				ChainID:       hex.EncodeToString(binding.ChainID),
+				Epoch:         binding.Epoch,
+				Slot:          binding.Slot,
+				Height:        binding.Height,
+				CommitteeID:   hex.EncodeToString(binding.CommitteeID),
+				MessageDomain: hex.EncodeToString(binding.MessageDomain),
+				Message:       hex.EncodeToString(msg),
+				PublicKey:     hex.EncodeToString(key.PublicKey.Bytes),
+				Signature:     hex.EncodeToString(sig.Bytes),
 			})
 		}
 	}
-	writeJSON(filepath.Join(*outDir, "dkg.json"), dkgKATs)
+	writeJSON(filepath.Join(*outDir, "thbsse-sign.json"), thbsseKATs)
 
 	fmt.Println("KAT vectors written to", *outDir)
 }
@@ -298,42 +302,6 @@ func makeKATCommittee(n int) []pm.NodeID {
 		copy(out[i][1:], []byte("MAGNETAR-KAT"))
 	}
 	return out
-}
-
-// runKATDKG runs a deterministic DKG ceremony for KAT generation.
-func runKATDKG(params *pm.Params, committee []pm.NodeID, threshold int, mode pm.Mode, masterSeed []byte) (*pm.PublicKey, []*pm.KeyShare, [48]byte) {
-	n := len(committee)
-	sessions := make([]*pm.DKGSession, n)
-	for i := range sessions {
-		seedTag := append([]byte("MAGNETAR-DKG-KAT-V1"), []byte{byte(mode), byte(n), byte(threshold), byte(i)}...)
-		rng := newDetReader(append(masterSeed, seedTag...))
-		s, err := pm.NewDKGSession(params, committee, threshold, committee[i], rng)
-		if err != nil {
-			fail(fmt.Errorf("NewDKGSession[%d]: %w", i, err))
-		}
-		sessions[i] = s
-	}
-	r1 := make([]*pm.DKGRound1Msg, n)
-	for i, s := range sessions {
-		r1[i], _ = s.Round1()
-	}
-	r2 := make([]*pm.DKGRound2Msg, n)
-	for i, s := range sessions {
-		r2[i], _ = s.Round2(r1)
-	}
-	outs := make([]*pm.DKGOutput, n)
-	for i, s := range sessions {
-		o, err := s.Round3(r2)
-		if err != nil {
-			fail(fmt.Errorf("Round3[%d]: %w", i, err))
-		}
-		outs[i] = o
-	}
-	shares := make([]*pm.KeyShare, n)
-	for i, o := range outs {
-		shares[i] = o.SecretShare
-	}
-	return outs[0].GroupPubkey, shares, outs[0].TranscriptHash
 }
 
 func writeJSON(path string, v any) {

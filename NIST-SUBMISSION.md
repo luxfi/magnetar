@@ -1,4 +1,11 @@
-# NIST MPTC Submission — Magnetar (one-page executive summary)
+# NIST MPTC Submission --- Magnetar (one-page executive summary)
+
+> **v1.0 framing.** Magnetar v1.0 ships TWO primitives:
+> per-validator standalone (`standalone.go`) and THBS-SE
+> (`thbsse.go` + `thbsse_field.go`). The text below was written
+> against the v0.x reveal-and-aggregate construction; v1.0
+> superseding language is in `README.md`, `SPEC.md`, `THBS-SPEC.md`,
+> `CHANGELOG.md::[1.0.0]`, and `CRYPTOGRAPHER-SIGN-OFF.md`.
 
 > **Executive summary** of the Magnetar package for the NIST Multi-Party
 > Threshold Cryptography (MPTC) project. The full cover sheet is in

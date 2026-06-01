@@ -4,7 +4,8 @@
 package magnetar
 
 // standalone.go — Per-validator standalone SLH-DSA: the PRIMARY,
-// CANONICAL primitive for public-BFT post-quantum consensus.
+// CANONICAL production primitive for public-BFT post-quantum
+// consensus.
 //
 // HONEST ARCHITECTURE FRAMING
 // ===========================
@@ -20,8 +21,8 @@ package magnetar
 //   - Bonte, Smart, Tan (2023), "Threshold SPHINCS+": exhaustive
 //     infeasibility analysis. There is no efficient t-of-n SLH-DSA
 //     scheme producing a single FIPS 205-shaped signature without
-//     either (a) reconstructing the seed (dealer or aggregator in
-//     TCB) or (b) running full MPC over the SHA-256/SHAKE hash tree
+//     either (a) reconstructing the seed (transient combiner role)
+//     or (b) running full MPC over the SHA-256/SHAKE hash tree
 //     (multi-second per signature, multi-megabyte of comms).
 //   - NIST IR 8214 / MPTC submission notes: SLH-DSA is classified
 //     as "highest threshold-MPC cost" among FIPS 20{3,4,5}.
@@ -41,36 +42,23 @@ package magnetar
 //   valid_count = Σ_i 1[FIPS 205 Verify(pk_i, msg, σ_i) ∧ pk_i = registry(i)]
 //   accept iff valid_count ≥ quorum_threshold
 //
-// Wire size: N × |σ|. For SHAKE-192s (16,224-byte σ) and a 21-validator
-// quorum that's ~332 KiB. A Z-Chain Groth16 rollup compresses this to
-// ~192 bytes; the rollup is a SEPARATE primitive (lux-zchain spec),
-// not part of this API.
+// Wire size: N × |σ|. For SHAKE-192s (16,224-byte σ) and a
+// 21-validator quorum that's ~332 KiB. A Z-Chain Groth16 rollup
+// compresses this to ~192 bytes; the rollup is a SEPARATE
+// primitive (lux-zchain spec), not part of this API.
 //
-// WHY NOT THRESHOLD HBS FOR PUBLIC CONSENSUS
-// ==========================================
+// COMPANION THRESHOLD CONSTRUCTION
+// ================================
 //
-// The thbs subpackage (ref/go/pkg/thbs/) ships TRUE threshold HBS
-// per McGrew et al. ePrint 2019/793. Its v1 setup is DEALER-BACKED:
-// a single dealer generates the per-element secrets and Shamir-shares
-// them. Dealer-backed threshold HBS is RESEARCHED but NOT public-BFT-
-// safe (the dealer learns every secret element at setup time).
-//
-// A truly public-DKG threshold HBS requires:
-//   (A) PVSS distribution of per-element entropy contributions:
-//       x_{slot,e} = Σ_j r_{j,slot,e}; no party holds x.
-//   (B) MPC over the SHA-256/SHAKE hash tree to compute the public
-//       Merkle root from secret-shared leaves WITHOUT REVEALING the
-//       leaves. This is the hard frontier (Damgård-Pastro-Smart-
-//       Zakarias SPDZ 2012, Wang-Ranellucci-Katz "Global-Scale Secure
-//       Multiparty Computation" 2017, Boyle-Gilboa-Ishai "Function
-//       Secret Sharing" 2015).
-//
-// (A) is shipped at thbs/dkg2/ as a skeleton. (B) is open research
-// tracked at BLOCKERS.md::MAGNETAR-PUBLIC-DKG-1. Until (B) lands,
-// thbs is APPROPRIATE for M-Chain bridge custody (where a TEE'd
-// dealer is in the TCB by policy) but NOT for public BFT.
-//
-// FOR PUBLIC BFT: USE THIS FILE.
+// For deployments that genuinely need a SINGLE FIPS 205-shaped
+// signature from a t-of-n committee (e.g. for a verifier-side
+// constant-cost certificate), Magnetar v1.0 ships THBS-SE
+// (thbsse.go) — the ONE permissionless threshold construction.
+// THBS-SE uses Shamir-VSS over the SLH-DSA seed plus slot-bound
+// commit-and-reveal; the public combiner role is open to any peer
+// and the seed lives in the combiner's transient memory for one
+// Sign call. THBS-SE does not require an HSM-attested host in the
+// TCB; any peer can run Combine.
 //
 // API CONTRACT
 // ============
@@ -122,37 +110,13 @@ package magnetar
 //
 //   - The quorum decision (count ≥ threshold) lives at the CONSUMER.
 //     This primitive REPORTS facts; policy gates filter them.
-//
-// COMPOSITION WITH THE EXISTING AGGREGATE API
-// ===========================================
-//
-// The aggregate.go API (SignedBundle, AggregateSignatures,
-// VerifyAggregated, etc.) ships the SAME computational graph under
-// a "bundle / aggregate" shape: bundles carry self-describing
-// PublicKey bytes in the envelope; AggregateSignatures dedupes and
-// shape-checks; VerifyAggregated cross-checks against a registry.
-// That API STAYS — it is the SDK-friendly form.
-//
-// The standalone.go API is the EXPLICIT-SEMANTIC form for the
-// consensus layer: ValidatorSign returns raw σ bytes that flow
-// straight into a wire envelope without going through SignedBundle;
-// ValidatorAggregateCert carries the (PubKeys, Sigs, Signers)
-// triple as parallel slices ready to be Groth16-compressed.
-//
-// Both APIs are byte-compatible: a ValidatorAggregateCert built
-// from N ValidatorSign outputs verifies under VerifyAggregated
-// after a trivial conversion (see toSignedBundles below). The
-// duplication is DELIBERATE — bundles are the SDK shape;
-// aggregate-cert is the consensus-wire shape.
 
 import (
+	"crypto/rand"
 	"errors"
 	"io"
 	"runtime"
 )
-
-// (crypto/rand is reached via Sign indirectly; this file does not
-// directly source randomness.)
 
 // Errors returned by the standalone (public-BFT) API.
 var (
@@ -191,11 +155,18 @@ var (
 //
 // rng may be nil (crypto/rand is used). Pass a deterministic
 // reader for KAT-reproducible key generation.
-//
-// Equivalent semantics to GenerateValidatorKey in aggregate.go;
-// this is the EXPLICIT-SEMANTIC name for the public-BFT path.
 func PerValidatorKeypair(params *Params, rng io.Reader) (*PrivateKey, *PublicKey, error) {
-	return GenerateValidatorKey(params, rng)
+	if err := params.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if rng == nil {
+		rng = rand.Reader
+	}
+	sk, err := GenerateKey(params, rng)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sk, sk.Pub, nil
 }
 
 // ValidatorSign is the canonical public-BFT signing primitive.
@@ -219,8 +190,8 @@ func PerValidatorKeypair(params *Params, rng io.Reader) (*PrivateKey, *PublicKey
 // When rng is non-nil, the output is FIPS 205 SignRandomized with
 // n bytes of fresh randomness drawn from rng. Use the randomized
 // variant only if you specifically need the hedged-against-bad-RNG
-// property; the deterministic variant is the standard recommendation
-// for consensus.
+// property; the deterministic variant is the standard
+// recommendation for consensus.
 //
 // ctx is intentionally omitted: this primitive is the wire-format
 // canonical sign. Bind chain-id / block-height into the message
@@ -246,10 +217,8 @@ func ValidatorSign(sk *PrivateKey, rng io.Reader, message []byte) ([]byte, error
 // ValidatorBatchVerify verifies N (pub, msg, sig) triples and
 // returns a bitmap of valid/invalid per signer.
 //
-// Parallelism: this routes through the same goroutine fork-join
-// pattern as VerifyAggregated (above the
-// verifyAggregatedConcurrentThreshold the work is forked across
-// GOMAXPROCS workers). The pattern mirrors
+// Parallelism: above the validatorBatchConcurrentThreshold the
+// work is forked across GOMAXPROCS workers. The pattern mirrors
 // luxfi/crypto/slhdsa.VerifyBatch — when magnetar is embedded in a
 // system that exports a GPU substrate (e.g. consensus quorum
 // verification routing through crypto/slhdsa.VerifyBatch with the
@@ -267,9 +236,7 @@ func ValidatorSign(sk *PrivateKey, rng io.Reader, message []byte) ([]byte, error
 //     mode mismatches, nil inputs).
 //
 // Provenance: the dispatch tier (serial vs goroutine-parallel) is
-// observable via LastVerifyAggregatedTier — the same hook the
-// aggregate.go path uses, since ValidatorBatchVerify and
-// VerifyAggregated share the same parallel-CPU dispatch.
+// observable via LastValidatorBatchTier (dispatch.go).
 func ValidatorBatchVerify(params *Params, pubs []*PublicKey, msgs [][]byte, sigs [][]byte) ([]bool, error) {
 	if err := params.Validate(); err != nil {
 		return nil, err
@@ -299,35 +266,23 @@ func ValidatorBatchVerify(params *Params, pubs []*PublicKey, msgs [][]byte, sigs
 		}
 	}
 
-	// Build the per-bundle AggregatedSignature view so we can reuse
-	// the existing parallel-CPU dispatch in VerifyAggregated. We
-	// intentionally do NOT pass a knownValidators map here — the
-	// bitmap path is for the lower-level case where the registry
-	// binding is handled by the caller (VerifyAggregateCert is the
-	// registry-binding wrapper).
-	//
-	// We dispatch directly so we get the same provenance hook
-	// (LastVerifyAggregatedTier) without paying the dedupe pass —
-	// in this primitive the caller has already chosen the input
-	// order.
-	dispatchTier := verifyAggregatedSerial
-	if n >= verifyAggregatedConcurrentThreshold {
-		dispatchTier = verifyAggregatedConcurrent
+	dispatchTier := validatorBatchSerial
+	if n >= validatorBatchConcurrentThreshold {
+		dispatchTier = validatorBatchConcurrent
 		validatorBatchVerifyConcurrent(params, pubs, msgs, sigs, out)
 	} else {
 		for i := 0; i < n; i++ {
 			out[i] = slhVerify(params.ID, pubs[i].Bytes, msgs[i], nil, sigs[i])
 		}
 	}
-	recordVerifyAggregatedTier(dispatchTier)
+	recordValidatorBatchTier(dispatchTier)
 	return out, nil
 }
 
 // validatorBatchVerifyConcurrent runs per-signer Verify across
 // GOMAXPROCS goroutines for the message-batch case (each signer
 // gets its own message). Pure function per signer, no shared
-// state — same byte-equality contract as the serial path and as
-// VerifyAggregated's parallel dispatch.
+// state — same byte-equality contract as the serial path.
 func validatorBatchVerifyConcurrent(params *Params, pubs []*PublicKey, msgs [][]byte, sigs [][]byte, out []bool) {
 	n := len(pubs)
 	workers := runtimeGOMAXPROCS()
@@ -396,22 +351,13 @@ func runtimeGOMAXPROCS() int {
 // (Magnetar's reference impl does NOT pin a specific transport
 // encoding — that's the responsibility of the consensus layer.
 // RLP / protobuf / canonical binary are all reasonable choices.
-// The parallel-slices form is INTENTIONALLY chosen over a nested
-// SignedBundle list because it maps directly to Z-Chain Groth16
-// rollup input where the prover's wire shape is N parallel
-// witnesses, not N records.)
+// The parallel-slices form is INTENTIONALLY chosen because it
+// maps directly to Z-Chain Groth16 rollup input where the
+// prover's wire shape is N parallel witnesses, not N records.)
 //
 // All N signatures are over the SAME message. If the consensus
 // layer needs distinct per-signer messages (e.g. per-signer
 // transcript binding), use ValidatorBatchVerify directly.
-//
-// This shape is the SIBLING of AggregatedSignature (aggregate.go):
-//   - AggregatedSignature: nested SignedBundle list, SDK-friendly,
-//     self-describing per-bundle.
-//   - ValidatorAggregateCert: parallel-slices, consensus-wire
-//     friendly, Z-Chain-rollup-friendly.
-//
-// Both are byte-equivalent under conversion (see toSignedBundles).
 type ValidatorAggregateCert struct {
 	// Mode is the FIPS 205 parameter set every signature targets.
 	Mode Mode
@@ -484,32 +430,27 @@ func BuildAggregateCert(params *Params, signers []NodeID, pubKeys [][]byte, sigs
 // Verification rules (each enforced per signer):
 //
 //  1. cert.Signers[i] must appear in knownValidators. If not, that
-//     signer is COUNTED AS INVALID. This is a defense-in-depth choice
-//     against impersonation: an attacker who slips a SignedBundle
-//     from an unknown validator into the cert does NOT crash the
-//     verifier, but does NOT gain a count either. (Compare to
-//     VerifyAggregated which returns ErrUnknownValidator as a fatal
-//     error; the standalone form is more permissive on registry
-//     misses because the cert may be Groth16-rolled-up over a
-//     stale registry and the verifier should not abort the entire
-//     batch on one stale entry.)
+//     signer is COUNTED AS INVALID. This is a defense-in-depth
+//     choice against impersonation: an attacker who slips a stale
+//     entry from an unknown validator into the cert does NOT crash
+//     the verifier, but does NOT gain a count either.
 //
 //  2. cert.PubKeys[i] must byte-equal knownValidators[cert.Signers[i]].
 //     A pubkey mismatch is also counted as INVALID (NOT fatal) —
 //     same rationale as (1).
 //
-//  3. The signature must verify under the REGISTERED public key (not
-//     the cert's embedded copy, to be paranoid).
+//  3. The signature must verify under the REGISTERED public key
+//     (not the cert's embedded copy, to be paranoid).
 //
 //  4. Duplicate signers are deduped: the FIRST occurrence wins and
-//     subsequent occurrences are silently dropped (NOT counted twice,
-//     NOT counted as invalid — the consensus layer can collect proof
-//     of double-signing separately via per-signer Sigs comparison).
+//     subsequent occurrences are silently dropped (NOT counted
+//     twice, NOT counted as invalid — the consensus layer can
+//     collect proof of double-signing separately via per-signer
+//     Sigs comparison).
 //
 // The count is the load-bearing output: a quorum policy decision
 // ("is N ≥ threshold?") lives at the consumer, NOT in this
-// primitive. This is the same decomplecting discipline the rest of
-// the Lux post-quantum stack uses.
+// primitive.
 //
 // Returns:
 //   - validCount: number of signers that verified, in [0, len(cert.Signers)].

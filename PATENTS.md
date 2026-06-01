@@ -1,4 +1,10 @@
-# PATENTS — Magnetar Threshold SLH-DSA Signature
+# PATENTS --- Magnetar SLH-DSA Signature
+
+> **v1.0 framing.** This document is a v0.x archival snapshot. The
+> v1.0 patent grant covers the THBS-SE construction
+> (`thbsse.go` + `thbsse_field.go`) under the same terms as the
+> v0.x reveal-and-aggregate path described below; the construction
+> details have changed but the IP posture is unchanged.
 
 > **Statement of Intellectual Property and Royalty-Free Patent Grant**
 > for the Magnetar threshold-signing construction submitted to the NIST

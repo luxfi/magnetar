@@ -3,24 +3,31 @@
 
 package magnetar
 
-// zeroize.go — best-effort secret-buffer zeroization.
+// zeroize.go --- best-effort secret-buffer zeroization.
 //
-// Threat model: a Magnetar process holding reconstructed secret
-// material (e.g. the Combine aggregator's master seed) is at risk
-// of coredump / /proc/self/mem / swap-file exfiltration if the
-// secret is left live on the heap or stack after use. Go provides
-// no native `runtime.Memzero` and the GC may copy buffers around;
-// zeroize is a defense-in-depth measure, not a guarantee.
+// Threat model: a Magnetar process holding transient secret material
+// (the THBS-SE public combiner's reconstructed seed; a per-validator
+// PrivateKey buffer at standalone-sign time) is at risk of coredump,
+// /proc/self/mem, or swap-file exfiltration if the secret is left
+// live on the heap or stack after use. Go provides no native
+// runtime.Memzero and the GC may copy buffers around; zeroize is a
+// defense-in-depth measure, not a guarantee.
 //
-// We deliberately do NOT use `defer` for zeroize calls — the
+// We deliberately do NOT use `defer` for zeroize calls --- the
 // hot-path callers are short, and explicit zeroization at the
 // return site keeps the secret-handling code path locally legible.
 //
-// The v0.1 reveal-and-aggregate trust caveat: even with perfect
-// zeroization the aggregator process has a non-zero secret
-// lifetime window. See SPEC.md "Trust model" and
-// DEPLOYMENT-RUNBOOK.md for operational mitigations (mlock,
-// ptrace-off, etc).
+// THBS-SE v1.0 honest open item: the strict invariant ("no party or
+// combiner EVER reconstructs SK.seed, even transiently in memory")
+// requires the v1.1 strict-atom-assembly path tracked at
+// BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11. v1.0 ships a PUBLIC
+// COMBINER (anyone-can-combine) that holds the seed for the duration
+// of one circl SignDeterministic call and then zeroizes; this is
+// materially stronger than a TEE-attested privileged-aggregator
+// model (no host in TCB) and materially weaker than the strict
+// invariant (a peer-local memory-disclosure adversary at the combine
+// moment could observe the seed). See thbsse.go for the open-item
+// discussion.
 
 // zeroizeBytes overwrites every byte of b with 0.
 func zeroizeBytes(b []byte) {
