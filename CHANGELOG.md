@@ -1,10 +1,161 @@
-# Changelog — Magnetar
+# Changelog --- Magnetar
 
-All notable changes to the Magnetar threshold SLH-DSA library and
-NIST MPTC submission package are tracked in this file.
+All notable changes to the Magnetar SLH-DSA library and NIST MPTC
+submission package are tracked in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 Magnetar adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.0] --- 2026-05-31 --- ONE construction per regime; legacy seed-recombine paths killed
+
+### Architectural decomplecting (HONEST framing)
+
+This release closes Magnetar's permissionless-threshold story at
+**ONE** construction --- **THBS-SE** (Threshold Hash-Based Signatures
+with Selected-Element Reconstruction) --- and removes every legacy
+seed-recombine path from the codebase. Magnetar v1.0 ships exactly
+two primitives:
+
+- **Per-validator standalone** (`ref/go/pkg/magnetar/standalone.go`,
+  unchanged from v0.5.x) --- the public-BFT primary primitive. Each
+  validator holds its own FIPS 205 keypair, signs independently,
+  consensus collects N signatures into a `ValidatorAggregateCert`.
+- **THBS-SE** (`ref/go/pkg/magnetar/thbsse.go` +
+  `thbsse_field.go`) --- the permissionless threshold companion.
+  t-of-n committee, slot-bound commit-and-reveal, **public combiner
+  role** (anyone can run Combine), slashable equivocation +
+  malformed-share evidence.
+
+Both emit byte-identical FIPS 205 signatures that unmodified
+verifiers accept.
+
+### Hard invariant (THBS-SE)
+
+A revealed value is allowed ONLY if it is also present in the final
+SLH-DSA signature.
+
+- ALLOWED reveals: the per-round mask `r_i`, the masked share
+  `s'_i = share_i XOR r_i`, the public commit hash, the final FIPS
+  205 signature bytes.
+- FORBIDDEN reveals: `SK.seed`, `SK.prf`, future-slot share
+  material. The slot guard refuses any same-slot re-emission and the
+  share envelope is per-slot.
+
+### v1.0 honest open item
+
+The strict invariant ("no party or combiner EVER reconstructs
+SK.seed, even transiently in memory") requires the v1.1
+strict-atom-assembly path tracked at
+`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`. v1.0 ships a PUBLIC
+COMBINER (anyone-can-combine) that holds the seed for the duration
+of one `slhdsa.SignDeterministic` call and then zeroizes. This is
+materially stronger than a TEE-attested privileged-aggregator model
+(no host in TCB; the combiner is a pure function any peer can run)
+and materially weaker than the strict invariant (a peer-local
+memory-disclosure adversary at exactly the combine moment could
+observe the seed). The strict-atom path requires a Magnetar-internal
+re-implementation of FIPS 205 sec 5/6/7/8 that bypasses
+slh_sign_internal; cloudflare/circl's slhdsa does not expose those
+internals.
+
+### Added
+
+- **`ref/go/pkg/magnetar/thbsse.go`** --- the THBS-SE construction:
+  - `NewThbsSeKey(params, threshold, committee, rng) -> (*ThbsSeKey, error)`
+    --- deterministic-dealer setup that produces (PK, [share_i],
+    setup_transcript). The dealer is in the TCB FOR SETUP ONLY;
+    once NewThbsSeKey returns no party including the dealer holds
+    the master seed. Production deployments run the leaderless
+    PVSS-DKG path via the sibling `luxfi/threshold` DKG package
+    and feed the result into the wire-equivalent share envelope.
+  - `ThbsSeRound1(params, share, binding, msg, guard, rng) -> (r1, r2, error)`
+    --- per-party Round-1 commit + Round-2 reveal pair. Idempotent
+    replay on the same `(slot, msg)`; emits
+    `*ThbsSeEquivocationError` with a wire-shaped `ThbsSeEvidence`
+    blob on a same-slot, distinct-message second attempt.
+  - `Combine(input ThbsSeCombineInput) -> (*Signature, []ThbsSeShareEvidence, error)`
+    --- the PUBLIC combiner. Pure function of its inputs. Any peer
+    with the public ThbsSeKey, the slot binding, the message, and
+    >= t valid Round-1/Round-2 pairs can produce the FIPS 205
+    signature. Emits typed `ThbsSeShareEvidence` for malformed
+    shares (slot-mismatch, wire-size, commit-mismatch).
+  - `ThbsSeSlotGuard` + `Record` / `Has` --- per-party persistent
+    slot-use guard. Local-state defense against equivocation.
+  - `VerifyThbsSeEvidence` / `VerifyThbsSeShareEvidence` --- pure
+    third-party evidence verifiers. No committee state required.
+  - Slot binding: every signature is bound to
+    `(chain_id, epoch, slot, height, committee_id, message_domain)`
+    via cSHAKE256 transcript + FIPS 205 ctx string.
+- **`ref/go/pkg/magnetar/thbsse_field.go`** --- the GF(257)
+  byte-wise share arithmetic the THBS-SE construction consumes
+  internally. Unexported helpers: `thbsseDealRandom`,
+  `thbsseDealRandomGF`, `thbsseReconstructGF`, `thbsseShareToBytes`,
+  `thbsseShareFromBytes`. The only exported names are
+  `MaxCommittee257`, `EvalPointFromID`, and the THBS-SE error
+  values.
+- **`ref/go/pkg/magnetar/thbsse_test.go`** --- the 8 mandated test
+  gates plus a determinism check and a binding-distinct-signature
+  check:
+  - `TestThbsSE_Wire_FIPS205Verifiable` (3 SHAKE modes)
+  - `TestThbsSE_RejectSeedReveal`
+  - `TestThbsSE_RejectUnselectedFORS`
+  - `TestThbsSE_RejectUnselectedWOTS`
+  - `TestThbsSE_SlotReuseRejected`
+  - `TestThbsSE_OverselectedCommittee` (n=7, t=3, 4 honest + 3
+    withholders)
+  - `TestThbsSE_SlotBindingDomainSeparation`
+  - `BenchmarkThbsSE_Sign_5of7` (3 SHAKE modes)
+  - bonus: `TestThbsSE_PublicCombiner_Determinism` (disjoint
+    t-subsets produce byte-equal signatures)
+- **`vectors/thbsse-sign.json`** --- deterministic KAT vectors at
+  (n=7, t=4) x 3 SHAKE modes x 3 messages. Replayed by
+  `TestKAT_ThbsSe`.
+
+### Removed
+
+- `ref/go/pkg/magnetar/threshold.go` + `threshold_test.go` ---
+  legacy reveal-and-aggregate threshold sign path.
+- `ref/go/pkg/magnetar/aggregate.go` + `aggregate_test.go` ---
+  legacy aggregate-sign (subsumed by `standalone.go`'s
+  `ValidatorAggregateCert`).
+- `ref/go/pkg/magnetar/combine.go` --- legacy
+  `CombineWithSeedReconstruction` entry point.
+- `ref/go/pkg/magnetar/shamir.go` + `shamir_test.go` --- legacy
+  byte-wise Shamir helpers; the THBS-SE-internal subset lives in
+  `thbsse_field.go`.
+- `ref/go/pkg/magnetar/dkg.go` + `dkg_test.go` --- legacy DKG
+  primitives; the leaderless PVSS-DKG path now lives in the sibling
+  `luxfi/threshold` DKG package.
+- `ref/go/pkg/magnetar/e2e_test.go`, `fuzz_test.go`,
+  `n1_byte_equality_test.go` --- legacy tests tied to the
+  deleted threshold path. Equivalent coverage lives in
+  `thbsse_test.go` + `kat_test.go::TestKAT_ThbsSe`.
+- `ref/go/pkg/thbs/` (entire subtree) --- the legacy true-HBS
+  threshold path including the `dkg2/` PVSS skeleton.
+- `vectors/threshold-sign.json` + `vectors/dkg.json` --- legacy
+  KATs.
+- `jasmin/threshold/` + `jasmin/lib/` --- legacy Jasmin model of
+  the seed-recombine path. The v1.0 Jasmin scope (single-party
+  SLH-DSA via formosa-crypto libjade upstream when it lands) is
+  documented in `jasmin/README.md`.
+- `proofs/easycrypt/` (entire tree) --- legacy EasyCrypt theories
+  modeling the deleted `combine.go` / `threshold.go`. The v1.0
+  proof track (`proofs/README.md`) ports to the THBS-SE
+  construction shape in v1.1.
+- `ct/dudect/` (entire tree) --- legacy dudect harness over the
+  deleted `Combine` / `Verify` API surfaces. The v1.0 CT story is
+  "inherit CIRCL"; the v1.1 harness lands alongside the
+  strict-atom-assembly path.
+
+### Verification
+
+```bash
+cd ref/go && GOWORK=off go build ./... && GOWORK=off go test -count=1 -short -timeout 600s ./pkg/magnetar/...
+```
+
+The 8 test gates pass at `-count=1 -short -race`. The
+`BenchmarkThbsSE_Sign_5of7/Magnetar-SHAKE-192f` benchmark clocks at
+< 100 ms/op on Apple M1 Max.
 
 ## [Unreleased]
 

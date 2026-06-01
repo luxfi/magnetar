@@ -1,4 +1,10 @@
-# NIST MPTC Submission — Magnetar
+# NIST MPTC Submission --- Magnetar
+
+> **v1.0 framing.** This document is a v0.x archival snapshot.
+> Magnetar v1.0 ships two primitives: per-validator standalone and
+> THBS-SE (Threshold Hash-Based Signatures with Selected-Element
+> Reconstruction). See `README.md`, `SPEC.md`, `THBS-SPEC.md`, and
+> `CHANGELOG.md::[1.0.0]` for v1.0 normative content.
 
 This document is the cover sheet for the **Magnetar** submission to the
 NIST Multi-Party Threshold Cryptography (MPTC) project. It is written

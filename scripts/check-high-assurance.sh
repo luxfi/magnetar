@@ -1,36 +1,22 @@
 #!/usr/bin/env bash
-# Magnetar high-assurance gate — orchestrator (per-push, REAL checks).
+# Magnetar high-assurance gate --- orchestrator (per-push).
 #
-# At v0.4.0 Magnetar has full Tier A proof artifacts: EC theories,
-# Lean bridges, Jasmin sources, dudect harness — mirroring Pulsar's
-# Tier A reference at admit 0/0.
+# At v1.0.0 Magnetar's high-assurance scope is:
 #
-# Each check below lives in its own script under scripts/checks/ (or
-# scripts/, for the cross-prover Lean↔EC bridge guard). This file
-# is intentionally THIN: it sequences the checks and propagates
-# their exit codes. Each per-check script is independently runnable.
+#   - Single-party SLH-DSA via cloudflare/circl/sign/slhdsa v1.6.3.
+#     CT posture inherits CIRCL. See ct/README.md.
+#   - THBS-SE share arithmetic over GF(257). Straight-line modular
+#     arithmetic with constant-time intent (no secret-dependent
+#     branches). See thbsse_field.go.
 #
-# The checks, in order:
+# The v0.x EC + Jasmin + dudect harnesses that modeled the
+# abandoned reveal-and-aggregate path have been removed. The v1.1
+# proof + dudect track lands alongside the strict-atom-assembly
+# construction.
 #
-#   1. jasmin.sh                  — jasminc type-check + jasmin-ct
-#                                   on the threshold layer (blocking).
-#   2. ec-admits.sh               — EasyCrypt admit-budget (0/0 today).
-#   3. ec-regressions.sh          — Retired-axiom-shape regression
-#                                   guards.
-#   4. ec-refinement-scaffold.sh  — declare-axiom hygiene in the
-#                                   Refinement files.
-#   5. check-lean-bridge.sh       — Lean↔EC Shamir bridge guard
-#                                   (cross-cited from Pulsar).
-#   6. extraction.sh              — Jasmin → EC extraction sanity.
-#   7. ec-compile.sh              — All EC files compile clean.
-#   8. go-tests.sh                — Core Go unit tests (short mode).
-#
-# NOT in this gate (intentionally): dudect at smoke budget. A
-# 40k-sample dudect run can't certify constant time; the budget
-# isn't statistically meaningful. The REAL dudect gate is the
-# submission-grade run from ct/dudect/run-submission.sh (10^9
-# samples per target on a pinned CPU). It belongs in the nightly
-# gate, not per-push.
+# v1.0 per-push gate: go-tests.sh. The rest of the proof track
+# lands at v1.1 (see BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11 and
+# MAGNETAR-DUDECT-V11).
 #
 # Any per-check failure (exit 2) fails the orchestrator with the
 # same code. Per-check skips (exit 0 with a [skip] message) do not
@@ -42,20 +28,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 CHECKS=(
-    "scripts/checks/jasmin.sh"
-    "scripts/checks/ec-admits.sh"
-    "scripts/checks/ec-regressions.sh"
-    "scripts/checks/ec-refinement-scaffold.sh"
-    "scripts/check-lean-bridge.sh"
-    "scripts/checks/extraction.sh"
-    "scripts/checks/ec-compile.sh"
     "scripts/checks/go-tests.sh"
 )
 
-echo "==> Magnetar high-assurance track"
-echo "    jasmin/   $REPO_ROOT/jasmin"
-echo "    easycrypt $REPO_ROOT/proofs/easycrypt"
-echo "    dudect    $REPO_ROOT/ct/dudect"
+echo "==> Magnetar high-assurance track (v1.0.0 scope)"
+echo "    construction: per-validator standalone + THBS-SE"
+echo "    proof track : ports to THBS-SE at v1.1 (see BLOCKERS.md)"
 echo
 
 OVERALL=0
@@ -65,13 +43,13 @@ for check in "${CHECKS[@]}"; do
     if [[ $rc -ne 0 ]]; then
         OVERALL=$rc
         echo
-        echo "==> $check exited rc=$rc — aborting gate"
+        echo "==> $check exited rc=$rc --- aborting gate"
         break
     fi
     echo
 done
 
 if [[ $OVERALL -eq 0 ]]; then
-    echo "==> done — high-assurance gate green"
+    echo "==> done --- high-assurance gate green"
 fi
 exit $OVERALL

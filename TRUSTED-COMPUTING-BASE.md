@@ -1,4 +1,11 @@
-# TRUSTED-COMPUTING-BASE — Magnetar implementation TCB
+# TRUSTED-COMPUTING-BASE --- Magnetar implementation TCB
+
+> **v1.0 framing.** This document is a v0.x archival snapshot. The
+> v1.0 TCB for the per-validator standalone primitive is
+> `cloudflare/circl/sign/slhdsa` v1.6.3. The v1.0 TCB for THBS-SE
+> additionally includes the public combiner's transient memory at
+> the precise sub-second sign moment (see
+> `DEPLOYMENT-RUNBOOK.md` sec 2.1).
 
 > **What you must trust to rely on Magnetar's byte-equality
 > correctness claim.** Companion to `PROOF-CLAIMS.md` (proof scope)

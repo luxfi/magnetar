@@ -3,19 +3,24 @@
 
 package magnetar
 
-// keygen.go — single-party key generation. This is the FIPS 205
-// keygen path; the threshold-DKG distributed counterpart lives in
-// dkg.go.
+// keygen.go --- single-party key generation. This is the FIPS 205
+// keygen path consumed by both:
+//
+//   - the per-validator standalone primitive (standalone.go), where
+//     every validator runs GenerateKey once and persists (sk, pk); and
+//
+//   - the THBS-SE setup (thbsse.go::NewThbsSeKey), where a single
+//     scheme seed is sampled, Shamir-shared via thbsseDealRandom, and
+//     the master seed is zeroized before the ThbsSeKey struct is
+//     returned.
 //
 // Output: a FIPS 205 SLH-DSA key pair. The public key is byte-equal
 // to what circl's slhdsa.Scheme().DeriveKey would emit on the same
-// seed; the private key carries the seed alongside the packed key
-// so the threshold layer can reproduce shares deterministically.
+// seed; the private key carries the seed alongside the packed key.
 //
 // The seed is the variable-length (4n bytes) scheme-seed used by
-// circl's DeriveKey — for the recommended SHAKE-192s mode that's
-// 96 bytes. Magnetar Shamir-shares this seed across the committee
-// at DKG time.
+// circl's DeriveKey --- for the recommended SHAKE-192s mode that's
+// 96 bytes.
 
 import (
 	"crypto/rand"

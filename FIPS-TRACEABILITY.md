@@ -1,6 +1,12 @@
-# FIPS-TRACEABILITY — Magnetar
+# FIPS-TRACEABILITY --- Magnetar
 
-> **FIPS 205 § → Magnetar code map.** Magnetar IS FIPS-anchored
+> **v1.0 framing.** This document is a v0.x archival snapshot. The
+> v1.0 byte-identity claims are pinned by
+> `TestMagnetar_Wire_FIPS205Verifiable` (per-validator standalone)
+> and `TestThbsSE_Wire_FIPS205Verifiable` (THBS-SE). See `SPEC.md`
+> sec 4 for the v1.0 framing.
+
+> **FIPS 205 sec --> Magnetar code map.** Magnetar IS FIPS-anchored
 > at the single-party layer. This document maps the NIST FIPS 205
 > (Stateless Hash-Based Digital Signature Standard, 2024) sections
 > to the corresponding code paths in `~/work/lux/magnetar/ref/go/`.

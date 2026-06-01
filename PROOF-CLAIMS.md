@@ -1,6 +1,11 @@
-# PROOF-CLAIMS — Magnetar (HONEST framing)
+# PROOF-CLAIMS --- Magnetar (HONEST framing)
 
-> **What this submission proves, and — critically — what it does NOT.**
+> **v1.0 framing.** This document is a v0.x archival snapshot. The
+> v1.0 proof track ports to the THBS-SE construction shape and lands
+> at v1.1 (see `BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11` and
+> `proofs/README.md`).
+
+> **What this submission proves, and --- critically --- what it does NOT.**
 > Companion to `TRUSTED-COMPUTING-BASE.md` (TCB) and `SUBMISSION.md`
 > (cover sheet).
 >
