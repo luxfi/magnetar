@@ -1,4 +1,8 @@
-# AXIOM-INVENTORY — Magnetar
+# AXIOM-INVENTORY --- Magnetar
+
+> **v1.0 framing.** This document is a v0.x archival snapshot.
+> v1.0 axioms port to the THBS-SE construction shape. See
+> `BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11`.
 
 > Honest enumeration of every cryptographic assumption + residual
 > axiom Magnetar depends on. This document is load-bearing for the

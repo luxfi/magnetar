@@ -3,17 +3,18 @@
 
 package magnetar
 
-// verify.go — the canonical consensus-consumer entry point.
+// verify.go --- the canonical consensus-consumer entry point.
 //
-// This file is the Magnetar Class-N1-analog manifesto in code:
-// Verify literally dispatches to circl/slhdsa.Verify, which is the
-// FIPS 205 §10.3 verifier verbatim. No Magnetar-specific logic; no
+// Verify literally dispatches to circl/slhdsa.Verify, the FIPS 205
+// sec 10.3 verifier verbatim. No Magnetar-specific logic; no
 // threshold-specific extension fields; no envelope. A signature
-// produced by Combine (threshold.go) flows through the SAME Verify
-// code path as a single-party Sign output.
+// produced by ValidatorSign (per-validator standalone, standalone.go),
+// by Combine (THBS-SE public combiner, thbsse.go), or by a sibling
+// single-party FIPS 205 toolchain flows through the SAME Verify code
+// path and produces the same accept/reject result.
 //
-// Any change to Verify breaks output interchangeability with
-// single-party FIPS 205.
+// Any change to Verify breaks the wire-identity claim that ties
+// Magnetar to unmodified FIPS 205.
 
 import (
 	"errors"
@@ -54,10 +55,11 @@ var (
 // ctx is the FIPS 205 context string (≤255 bytes); pass nil for the
 // empty context. Match this to whatever was passed at Sign time.
 //
-// Class-N1-analog: this function MUST remain a thin dispatch over
-// the FIPS 205 verifier. Adding logic here breaks output
-// interchangeability with single-party FIPS 205 — the whole point
-// of the Magnetar threshold variant.
+// This function MUST remain a thin dispatch over the FIPS 205
+// verifier. Adding logic here breaks output interchangeability with
+// unmodified FIPS 205 verifiers (cloudflare/circl, NIST FIPS 205
+// reference, openssl-pq) --- the wire-identity claim that lets any
+// peer verify Magnetar signatures without a Magnetar dependency.
 func Verify(params *Params, groupPubkey *PublicKey, message []byte, sig *Signature) error {
 	return VerifyCtx(params, groupPubkey, message, nil, sig)
 }
@@ -98,9 +100,9 @@ func VerifyCtx(params *Params, groupPubkey *PublicKey, message, ctx []byte, sig 
 }
 
 // slhVerify dispatches to circl/slhdsa.Verify for the given
-// parameter ID. This is the only place outside keygen/sign that
-// touches the FIPS 205 implementation; centralising it makes the
-// Class-N1-analog dispatch auditable as a single function.
+// parameter ID. This is the only place outside keygen/sign/Combine
+// that touches the FIPS 205 implementation; centralising it makes
+// the wire-identity dispatch auditable as a single function.
 func slhVerify(id slhdsa.ID, packedPk, message, ctx, sig []byte) bool {
 	pk := slhdsa.PublicKey{ID: id}
 	if err := pk.UnmarshalBinary(packedPk); err != nil {

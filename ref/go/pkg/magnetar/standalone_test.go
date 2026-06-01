@@ -289,10 +289,10 @@ func TestVerifyAggregateCert_GPU_Provenance(t *testing.T) {
 	// aggregate.go BatchVerify provenance test — observable
 	// evidence that the per-bundle verify uses the goroutine
 	// fork-join pattern (the slhdsa.VerifyBatch parallel path).
-	tier := LastVerifyAggregatedTier()
-	if tier != verifyAggregatedConcurrent {
-		t.Fatalf("LastVerifyAggregatedTier = %s, want %s — cert verify did not dispatch parallel",
-			tier, verifyAggregatedConcurrent)
+	tier := LastValidatorBatchTier()
+	if tier != validatorBatchConcurrent {
+		t.Fatalf("LastValidatorBatchTier = %s, want %s — cert verify did not dispatch parallel",
+			tier, validatorBatchConcurrent)
 	}
 }
 
