@@ -1,8 +1,9 @@
-# Magnetar v1.1 --- SLH-DSA (FIPS 205) for Lux
+# Magnetar v1.2 --- SLH-DSA (FIPS 205) for Lux
 
-Magnetar v1.1 ships ONE construction surface to each of the two
+Magnetar v1.2 ships ONE construction surface to each of the two
 deployment regimes Lux ecosystem chains need, with the strict-atom
-Combine path closing `MAGNETAR-STRICT-ATOM-V11`:
+Combine path closing `MAGNETAR-STRICT-ATOM-V11` and the dealerless
+PVSS-DKG closing `MAGNETAR-PVSS-DKG-V11`:
 
 | Regime | Construction | Where it lives |
 |---|---|---|
@@ -39,6 +40,55 @@ sig, ev, _  := magnetar.Combine(magnetar.ThbsSeCombineInput{
 // sig.Bytes is canonical FIPS 205; verifies under unmodified circl.slhdsa.Verify.
 ```
 
+### Setup --- two equivalent paths
+
+**Dealer setup (KAT-reproducible).** `NewThbsSeKey` samples a master,
+byte-shares it via Shamir over GF(257), and zeroizes the master
+before return. The dealer machine is in the TCB FOR SETUP ONLY; once
+the function returns, no party (including the dealer) holds the
+master. Recommended for foundation-HSM single-host bootstrap and
+KAT replay.
+
+**Dealerless PVSS-DKG setup (no trusted dealer).** Each committee
+party runs `NewPVSSPartyState` independently, publishes a
+`PublicContribution` (per-coefficient hash commitments only),
+distributes private share rows over authenticated channels, and
+publishes a `RevealMsg` at Round 2. Any third party collates the
+public payloads into a `PVSSTranscript` and invokes
+`NewThbsSeKeyFromDealerlessDKG` to assemble the canonical
+`ThbsSeKey`:
+
+```go
+// Each party i runs in its own process.
+state_i, _ := magnetar.NewPVSSPartyState(params, t, committee, uint32(i+1), rng)
+contrib_i  := state_i.PublicContribution()  // broadcast publicly
+share_to_j, _ := state_i.ShareTo(uint32(j+1))  // send privately to j
+reveal_i := state_i.RevealMsg()              // broadcast publicly at Round 2
+
+// Any auditor (or any party) collates the public-form transcript
+// and assembles the canonical ThbsSeKey.
+transcript := &magnetar.PVSSTranscript{
+    Params: params, Committee: committee, Threshold: t,
+    Contributions: contribs, Reveals: reveals,
+    ReceivedShares: receivedShares, SetupTr: setupTr,
+}
+key, _ := magnetar.NewThbsSeKeyFromDealerlessDKG(transcript)
+// key is byte-shape identical to the dealer-path output for the
+// implicit master M = sum_{i in Q} m_i mod 257 byte-wise.
+```
+
+The dealerless path enforces the hard invariant: **no party (and no
+transient dealer) ever holds the master byte vector at any time
+during setup**. The implicit master is only materialised inside the
+`deriveDKGPublicKey` closure (named `lagrangeScratch`, zeroized at
+closure exit) when an auditor invokes `VerifyDKGTranscript` to
+derive the public key.
+
+For reference, the `RunDKGSimulation` helper runs the full n-party
+protocol in a single test process (every party's state in one heap)
+for KAT replay and benchmark purposes; production deployments should
+run each party in its own process.
+
 **Hard invariant** (THBS-SE construction): a revealed value is allowed
 ONLY if it is also present in the final SLH-DSA signature.
 
@@ -52,12 +102,16 @@ ONLY if it is also present in the final SLH-DSA signature.
 **No-aggregator property**: The public combiner is a PURE function of
 its inputs. Any peer --- validator, block proposer, RPC node, passive
 watcher --- can run Combine. There is no privileged aggregator role
-and no host in the TCB at sign time. (v1.0 honest open item: the
-strict invariant "no party or combiner EVER reconstructs SK.seed,
-even transiently in memory" requires a v1.1 lift; v1.0 ships a public
-combiner that holds the seed for the duration of one
-`slhdsa.SignDeterministic` call and zeroizes. See
-`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`.)
+and no host in the TCB at sign time. (The strict-atom Combine path
+at v1.1 closed the residual transient-seed-at-combiner gap; see
+`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11` for the closure summary.)
+
+**No-trusted-dealer property**: The PVSS-DKG setup path
+(`NewThbsSeKeyFromDealerlessDKG`, v1.2) eliminates the trusted
+dealer from setup. No party (and no transient dealer) ever holds
+the master byte vector at any time during setup. See
+`BLOCKERS.md::MAGNETAR-PVSS-DKG-V11` for the closure summary and
+`pvss_dkg.go` for the construction.
 
 **Slot binding**: every signature is bound to
 `(chain_id, epoch, slot, height, committee_id, message_domain)`. The
@@ -105,7 +159,7 @@ no host in TCB. The per-validator standalone path sidesteps (a) and
 | Reference implementation | `ref/go/pkg/magnetar/` --- pure Go, depends on `cloudflare/circl/sign/slhdsa` v1.6.3 |
 | KAT vectors | `vectors/{keygen,sign,verify,thbsse-sign}.json` (deterministic regeneration) |
 | Wire identity | Both Magnetar primitives emit byte-identical FIPS 205 signatures; any unmodified slhdsa verifier accepts |
-| Tag | `v1.0.0` |
+| Tag | `v1.2.0` |
 | Cert-profile role | Polaris profile in `luxfi/quasar` (hash-based leg of the maximum-assurance cross-family PQ profile) |
 | Sibling primitives | Pulsar (FIPS 204 M-LWE), Corona (R-LWE) --- algorithmically distinct families |
 
@@ -125,6 +179,12 @@ cd ref/go && GOWORK=off go test -count=1 -short -timeout 600s ./pkg/magnetar/...
   `TestThbsSE_OverselectedCommittee`,
   `TestThbsSE_SlotBindingDomainSeparation` --- the 6 invariant gates
   for the THBS-SE construction.
+- `TestPVSS_DKG_NoSinglePartyHoldsMaster`,
+  `TestPVSS_DKG_ByteCompatWithDealerPath`,
+  `TestPVSS_DKG_AdversarialReveals`,
+  `TestPVSS_DKG_RobustnessAgainstMaliciousCommitments`,
+  `TestPVSS_DKG_EndToEnd_SignAndVerify` --- the 5 invariant gates
+  for the dealerless PVSS-DKG setup path (v1.2).
 - `BenchmarkThbsSE_Sign_5of7/Magnetar-SHAKE-192f` --- end-to-end
   per-signature wall-clock at < 100 ms/op on Apple M1.
 - `TestKAT_ThbsSe` --- deterministic vector replay at (n=7, t=4) x 3
