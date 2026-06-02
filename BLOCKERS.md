@@ -1,7 +1,12 @@
 # Magnetar --- Blockers
 
-Honest enumeration of what remains open at v1.0 and what is scoped at
-v1.1.
+Honest enumeration of what remains open at each release.
+
+## v1.1 ship state (current)
+
+v1.1 closes the v1.0 strict-atom + proof-track + dudect open items.
+See `CHANGELOG.md` v1.1.0 for the closure summary. The v1.1
+remaining open item is the leaderless PVSS-DKG; see below.
 
 ## v1.0 ship state
 
@@ -28,44 +33,49 @@ accepts.
 
 ### MAGNETAR-STRICT-ATOM-V11 --- Strict per-atom THBS-SE Combine
 
-**Status:** OPEN. Scope: v1.1.
+**Status:** CLOSED at v1.1.0. See `ASSEMBLE-INVARIANT.md` for the
+load-bearing prose statement and `CHANGELOG.md` v1.1.0 for the
+release summary.
 
-**Problem.** The user's strictest formulation of the THBS-SE
-invariant --- "no party or combiner EVER reconstructs SK.seed, even
-transiently in memory" --- requires assembling the FIPS 205 signature
-directly from per-atom share reconstructions of the message-selected
-FORS leaves and WOTS+ chain bases, bypassing the canonical
-`slh_sign_internal` procedure entirely.
+**Closure shape.** The v1.1 Combine path is implemented at
+`ref/go/pkg/magnetar/thbsse_assemble.go::assembleSignatureBytes`
+backed by `ref/go/pkg/magnetar/slhdsa_internal.go::slhSignAtom`
+(Magnetar-internal FIPS 205 sec 5--sec 8 walk for the SHAKE family).
+The strict-atom discipline is the four-pattern audit grep:
 
-That requires a Magnetar-internal re-implementation of FIPS 205
-sec 5 (WOTS+ chain), sec 6.2 (FORS sign), sec 7 (XMSS), and sec 8
-(hypertree) operations from per-atom share reconstructions;
-`cloudflare/circl/sign/slhdsa`'s implementation does not expose these
-as public APIs.
+```
+grep -rE "SK\.seed|SK\.prf|sk_seed|sk_prf" thbsse_assemble.go
+```
 
-**v1.0 ship state.** Magnetar v1.0 routes the final FIPS 205 byte
-production via `circl/slhdsa.SignDeterministic` on a seed
+returns ZERO, enforced by `TestThbsSE_StrictAtom_NoTransientSeed`
+(AST walk + raw-byte grep) and `scripts/checks/strict-atom-ast.sh`
+(shell gate). Byte-identity to `cloudflare/circl/sign/slhdsa.
+SignDeterministic` is pinned by `TestSlhdsaInternal_ByteEqualToCirclSign`
+across all three SHAKE modes.
+
+**Residual gap.** The bytes of the FIPS 205 master DO exist
+transiently inside `derivedMaterial` (the SHAKE-expansion output
+buffer) and `derivedExpandInput` (the Lagrange-reconstructed input
+to SHAKE) for the duration of the SHAKE absorb. A coredump or
+/proc/self/mem dump at exactly the right wall-clock instant would
+observe them. Closing this gap requires either full MPC over the
+SHAKE-256 hash tree (open research; multi-second per signature) or
+a TEE-attested host in the TCB (sibling primitive at
+`luxfi/threshold/protocols/slhdsa-tee`). The strict-atom discipline
+is the strictest discipline available without crossing into either
+regime; see `ASSEMBLE-INVARIANT.md` for the honest statement.
+
+**v1.0 ship state (archival).** Magnetar v1.0 routed the final FIPS
+205 byte production via `circl/slhdsa.SignDeterministic` on a seed
 reconstructed by the PUBLIC COMBINER (NOT a privileged aggregator).
-The seed is briefly present in the public combiner's memory for one
-Sign call and is zeroized before return. The combiner role is PUBLIC
---- anyone can be the combiner --- and there is no long-lived secret
-material outside party-local Shamir leaves.
+The seed was briefly present in the public combiner's memory for one
+Sign call and zeroized before return. The combiner role was PUBLIC.
 
-This is materially stronger than a TEE-attested
-privileged-aggregator model (no host is in the TCB; the combiner is
-a pure function any peer can run on its own substrate). It is
-materially weaker than the strict invariant (a peer-local
-memory-disclosure adversary at exactly the combine moment could
-observe the seed).
-
-**v1.1 work.** Reimplement the WOTS+ chain compute, FORS sign, XMSS
-node hash, and hypertree address derivation as Magnetar-internal
-primitives. The public combiner then reconstructs ONLY the
-message-selected FORS leaves and the WOTS+ chain bases sufficient
-for the specific signature, never reconstructing the full seed. The
-wire format, share format, slot-guard state, and protocol round
-structure are all forward-compatible with that lift --- only the
-Combine internals change.
+This was materially stronger than a TEE-attested
+privileged-aggregator model (no host in the TCB; the combiner was
+a pure function any peer could run on its own substrate). v1.1
+materially tightens the discipline by replacing the seed binder
+with positional slices of a SHAKE-expansion buffer.
 
 ### MAGNETAR-PVSS-DKG-V11 --- Leaderless PVSS-DKG for THBS-SE setup
 
@@ -95,26 +105,36 @@ documented in the spec.
 
 ### MAGNETAR-PROOF-TRACK-V11 --- THBS-SE EasyCrypt + Lean track
 
-**Status:** OPEN. Scope: v1.1.
+**Status:** CLOSED at v1.1.0. See `proofs/easycrypt/README.md` for
+the v1.1 theory inventory and `proofs/lean-easycrypt-bridge.md` for
+the cross-reference table.
 
-The legacy EasyCrypt scaffolding that modeled the abandoned v0.x
-seed-recombine path has been removed. The v1.0 proof track
-(`proofs/README.md`) ports to the THBS-SE construction shape:
-commit-bind ladder, byte-wise Shamir over GF(257), Lagrange
-reconstruct, FIPS 205 dispatch. The Lean bridge for the algebraic
-content (Shamir reconstruction identity, Lagrange basis uniqueness)
-mirrors Pulsar's `~/work/lux/proofs/lean/Crypto/` setup.
+**Theory files.** `Magnetar_N1_StrictAtom.ec` carries the headline
+byte-equality theorem for the strict-atom Combine path;
+`Magnetar_N1_SHAKE_Expand.ec` and `Magnetar_N1_Atom_Refinement.ec`
+discharge the supporting refinements; `lemmas/SLHDSA_Functional.ec`
+and `lemmas/Magnetar_CT.ec` provide the FIPS 205 SHAKE primitive
+definitions + CT lemma. Lean side at
+`proofs/lean/Crypto/Magnetar/StrictAtom.lean`.
+
+**Axiom budget.** 5 substantive admits + 1 abstract-vacuous CT
+admit. Cross-cites Pulsar Shamir (Lean) and Lux SHA3 (Lean) for the
+algebraic content.
 
 ### MAGNETAR-DUDECT-V11 --- v1.1 dudect harness
 
-**Status:** OPEN. Scope: v1.1.
+**Status:** CLOSED at v1.1.0. See `ct/dudect/README.md` for the
+methodology + Go-side gate.
 
-The v0.x dudect harness has been removed; it modeled deleted API
-surfaces. v1.0's CT story is "inherit CIRCL"
-(`ct/README.md`). The v1.1 harness re-lands alongside the
-strict-atom-assembly construction --- at that point the per-atom
-WOTS+ chain compute and FORS sign step become the new CT-critical
-surfaces, and dudect is the right tool.
+**Per-push gate.** `ct/dudect/strict_atom_combine_ct_test.go::
+TestStrictAtom_CT_NoSecretDependentBranch` (build tag `ct`) walks
+the strict-atom emit path's AST and asserts no secret-tagged
+identifier feeds an `if` / `switch` condition or an index
+expression. Run via `scripts/checks/dudect-smoke.sh`.
+
+**Release-time gate.** The full dudect statistical test on a
+compiled harness is documented in `ct/dudect/README.md` and is
+release-time only.
 
 ### MAGNETAR-EXTERNAL-AUDIT-V11 --- External cryptographer review
 
