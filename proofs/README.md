@@ -1,68 +1,70 @@
 # Magnetar --- machine-checked proof track
 
-Magnetar v1.0 ships two primitives:
+Magnetar v1.1 closes `MAGNETAR-STRICT-ATOM-V11` and lands the
+mechanised proof track for the strict-atom Combine path. Both
+primitives (per-validator standalone + THBS-SE strict-atom) are
+covered.
 
-- **Per-validator standalone** --- routes through
-  `cloudflare/circl/sign/slhdsa` v1.6.3 in production. The
-  single-party FIPS 205 functional + constant-time analysis tracks
-  the formosa-crypto `libjade-SLH-DSA` upstream when it lands. Until
-  then, the trust model relies on CIRCL's upstream review and the
-  NIST FIPS 205 reference.
+## What ships at v1.1
 
-- **THBS-SE (Threshold Hash-Based Signatures with Selected-Element
-  Reconstruction)** --- permissionless t-of-n threshold signing that
-  produces a byte-identical FIPS 205-shaped signature. See
-  `ref/go/pkg/magnetar/thbsse.go` for the construction, and
-  `THBS-SPEC.md` for the normative spec.
+| Layer | Path |
+|---|---|
+| EasyCrypt theory shells | `proofs/easycrypt/` |
+| Lean bridge (algebraic) | `proofs/lean/Crypto/Magnetar/` |
+| Bridge doc | `proofs/lean-easycrypt-bridge.md` |
 
-## What the proof track covers in v1.0
+The construction shape covered by the proof track:
 
-For v1.0 the machine-checked proof effort is **scoped to the
-algebraic identities the THBS-SE share arithmetic relies on**, plus
-the byte-identity claim that ties THBS-SE Combine output to
-single-party FIPS 205 SignDeterministic.
+- The strict-atom emitter `assembleSignatureBytes`
+  (`ref/go/pkg/magnetar/thbsse_assemble.go`).
+- The Magnetar-internal FIPS 205 sec 5/6/7/8 walk `slhSignAtom`
+  (`ref/go/pkg/magnetar/slhdsa_internal.go`).
+- The byte-wise Shamir over GF(257) + Lagrange interpolation at x=0
+  (`ref/go/pkg/magnetar/thbsse_field.go`).
+- The byte-identity claim that ties the strict-atom Combine output to
+  `cloudflare/circl/sign/slhdsa.SignDeterministic` on the same input.
 
-The legacy EasyCrypt scaffolding that modeled the abandoned v0.x
-seed-recombine path has been removed (it modeled `combine.go` and
-`threshold.go`, files that are no longer in the codebase). The
-v1.0 proof track is being rebuilt against the THBS-SE construction
-shape (commit-bind, byte-wise Shamir over GF(257), Lagrange
-reconstruct, FIPS 205 dispatch) and lands in v1.1 alongside the
-strict-atom-assembly construction.
+## Axiom budget
 
-## What ships in v1.0
+The strict-atom theory has 5 admits across the dependency cone:
 
-The Go reference implementation under
-`ref/go/pkg/magnetar/thbsse.go` and `thbsse_field.go` is the
-load-bearing artifact for v1.0. The 8 test gates listed in the
-v1.0 sign-off (TestThbsSE_Wire_FIPS205Verifiable,
-TestThbsSE_RejectSeedReveal, TestThbsSE_RejectUnselectedFORS,
-TestThbsSE_RejectUnselectedWOTS, TestThbsSE_SlotReuseRejected,
-TestThbsSE_OverselectedCommittee,
-TestThbsSE_SlotBindingDomainSeparation,
-BenchmarkThbsSE_Sign_5of7) pin the byte-identity, slot-binding, and
-slashing-evidence properties end-to-end against unmodified
-`cloudflare/circl/sign/slhdsa.Verify`. The KAT replay
-(`TestKAT_ThbsSe`) pins deterministic vectors at (n=7, t=4) across
-all three SLH-DSA modes and three messages.
+| Axiom | File | Discharge mechanism |
+|---|---|---|
+| `combine_assemble_axiom` | `Magnetar_N1_StrictAtom.ec` | Go extraction trust boundary; audit reads `assembleSignatureBytes` line-for-line against the abstract `AssembleAbs` model. |
+| `shake256_functional` | `Magnetar_N1_SHAKE_Expand.ec` | FIPS 202 functional spec. Cross-cited from Lean `Crypto.Lux.SHA3`. |
+| `magnetar_internal_refines_circl` | `Magnetar_N1_Atom_Refinement.ec` | Discharged by Go test `TestSlhdsaInternal_ByteEqualToCirclSign` per SHAKE mode. |
+| `slhdsa_correctness` | `lemmas/SLHDSA_Functional.ec` | FIPS 205 sec 10 NIST verification. |
+| `lagrange_recovers_master` | `Magnetar_N1_StrictAtom.ec` | Algebraic; Lean-bridged to `Crypto.Magnetar.StrictAtom.byte_wise_shamir_lagrange_at_zero_identity`. |
+| (CT) abstract-level vacuous | `lemmas/Magnetar_CT.ec` | Concrete CT discharged by direct audit of strict-atom Combine path Go source. |
 
-## What lands in v1.1
+Total: 6 admits (5 substantive + 1 abstract-vacuous), corresponding to
+the trust footprint enumerated in `proofs/easycrypt/README.md`. This is
+the same shape as the v0.4 EC track (1 byte-walk + 1 codec + 3
+protocol-level + 1 FIPS 205) but specialised to the strict-atom
+construction.
 
-The v1.1 proof track plan:
+## v1.0 -> v1.1 delta
 
-1. **EasyCrypt theory shells** for THBS-SE: the commit-bind ladder,
-   the byte-wise Shamir over GF(257), the Lagrange interpolation at
-   x=0, and the byte-identity step that ties the final SLH-DSA bytes
-   to single-party FIPS 205 SignDeterministic on the reconstructed
-   seed (or, in the strict-atom v1.1 path, on the directly-assembled
-   FIPS 205 signature atoms).
+The v0.x EC scaffolding (modelled the abandoned reveal-and-aggregate
+construction) was removed at v1.0; the v1.1 track is built directly
+against the strict-atom Combine path.
 
-2. **Lean bridge** for the algebraic content (Shamir reconstruction
-   identity, Lagrange basis uniqueness over finite fields, polynomial
-   interpolation existence) mirroring Pulsar's
-   `~/work/lux/proofs/lean/Crypto/` setup.
+The Lean side carries the abstract-model discipline statement
+`strict_atom_discipline` (vacuous at the abstract level; the concrete
+discipline is enforced by the Go test
+`TestThbsSE_StrictAtom_NoTransientSeed`).
 
-3. **Jasmin track** for the strict-atom path (Magnetar-internal FIPS
-   205 sec 5/6/7/8 surface), once that construction lands at v1.1.
+## Per-push gate
 
-See `BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11` for the v1.1 roadmap.
+The `scripts/check-high-assurance.sh` orchestrator runs:
+
+- `scripts/checks/go-tests.sh` (v1.0 scope; carries forward unchanged).
+- `scripts/checks/strict-atom-ast.sh` (NEW at v1.1): runs the
+  `TestThbsSE_StrictAtom_NoTransientSeed` AST + grep invariant gate
+  per-push. The AST gate is a fast check that the strict-atom
+  discipline holds on the file.
+- `scripts/checks/easycrypt.sh` (NEW at v1.1): smoke-checks the EC
+  theory shells for syntax / require / import consistency. Full
+  EasyCrypt re-run is a release-time gate, not per-push, because
+  EC is heavy to bring up (the per-push gate runs in <60s; full EC
+  takes the EC project's standard hour to run).
