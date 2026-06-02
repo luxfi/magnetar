@@ -6,6 +6,92 @@ submission package are tracked in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 Magnetar adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] --- Dealerless PVSS-DKG setup: no trusted dealer
+
+### Headline
+
+v1.2 closes `MAGNETAR-PVSS-DKG-V11`. The THBS-SE setup path no longer
+requires a trusted dealer holding the master byte vector even
+transiently. A new `NewThbsSeKeyFromDealerlessDKG` constructor
+accepts a `PVSSTranscript` from an n-party Schoenmakers-style
+PVSS-DKG run over GF(257) and assembles a `ThbsSeKey` byte-shape
+identical to the dealer-path output.
+
+The implicit master M = sum_{i in Q} m_i mod 257 byte-wise is NEVER
+materialised in any party's memory during setup. The only point at
+which M is transiently assembled is inside the
+`deriveDKGPublicKey` closure (named `lagrangeScratch`, zeroized at
+closure exit) when an auditor invokes `VerifyDKGTranscript` to
+derive the public key.
+
+### New public surface
+
+- `NewPVSSPartyState` --- one party's Round-1 state.
+- `PVSSPartyState.PublicContribution` --- broadcast payload.
+- `PVSSPartyState.ShareTo(j)` --- private share row for recipient j.
+- `PVSSPartyState.RevealMsg` --- Round-2 reveal payload.
+- `VerifyContribution` / `VerifyShareConsistency` --- public-form
+  per-party verifiers.
+- `RunDKGSimulation` --- single-process n-party simulation harness.
+- `PVSSTranscript` --- canonical wire-shape record of a full DKG run.
+- `VerifyDKGTranscript` --- public-form auditor entry point;
+  returns (qualified set, derived PK, error).
+- `NewThbsSeKeyFromDealerlessDKG` --- the headline closure: takes a
+  PVSSTranscript and emits a canonical `ThbsSeKey`.
+- `PVSSComplaint` / `VerifyPVSSComplaint` --- public-form slashing
+  evidence for malicious Round-2 reveals.
+
+### Wire compatibility
+
+- Wire format (MAGS / MAGG envelopes) is UNCHANGED at v1.2. The
+  dealerless setup produces share envelopes byte-shape identical to
+  what the dealer path produces for the same implicit master;
+  already-deployed share material is forward-compatible.
+- THBS-SE share format, slot-guard state, equivocation evidence
+  shape, and protocol round structure are UNCHANGED.
+- API additions: `NewThbsSeKeyFromDealerlessDKG` is a new
+  constructor in the same `magnetar` package; the existing
+  `NewThbsSeKey` dealer-path constructor is retained for KAT
+  reproducibility and foundation-HSM bootstrap.
+- v1.1.0 consumers bump to v1.2.0 transparently --- the new
+  constructor is additive.
+
+### Hard invariant (load-bearing v1.2)
+
+NO PARTY (and no transient dealer) EVER HOLDS THE MASTER BYTE
+VECTOR AT ANY TIME DURING SETUP.
+
+Enforced by:
+
+- `TestPVSS_DKG_NoSinglePartyHoldsMaster` (full DKG exercise +
+  AST-walk guard on `pvss_dkg.go` against master-naming).
+- `TestPVSS_DKG_ByteCompatWithDealerPath` (wire-byte equality
+  between dealerless and dealer paths for the same implicit master).
+- `TestPVSS_DKG_AdversarialReveals` (t-1 corrupted parties cannot
+  recover the master from their partial-sum view).
+- `TestPVSS_DKG_RobustnessAgainstMaliciousCommitments` (malicious
+  parties detected at Round 2 and excluded from Q; clean termination
+  via `ErrPVSSQuorumLost` when |Q| < t).
+- `TestPVSS_DKG_EndToEnd_SignAndVerify` (dealerless-DKG-produced
+  `ThbsSeKey` flows into `ThbsSeRound1` / `Combine` unchanged and
+  emits a signature that verifies under unmodified
+  `cloudflare/circl/sign/slhdsa.Verify`).
+
+### EasyCrypt theory
+
+`proofs/easycrypt/Magnetar_N5_PVSS_DKG.ec` --- Class N5 secrecy,
+correctness, and wire-compat theorems for the PVSS-DKG path. 2
+admits (Shamir info-theoretic cross-cite + Go-extraction trust
+boundary).
+
+### Composition
+
+The dealerless setup composes with the v1.1 strict-atom Combine
+path: a `ThbsSeKey` produced by `NewThbsSeKeyFromDealerlessDKG`
+flows through `Combine` unchanged. The signature emitted is
+byte-equal to what `Combine` would emit on a dealer-path
+`ThbsSeKey` for the same implicit master.
+
 ## [1.1.0] --- 2026-05-31 --- Strict-atom Combine: no named transient seed binder
 
 ### Headline
