@@ -6,6 +6,115 @@ submission package are tracked in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 Magnetar adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] --- 2026-05-31 --- Strict-atom Combine: no named transient seed binder
+
+### Headline
+
+v1.1 closes `MAGNETAR-STRICT-ATOM-V11`. The THBS-SE permissionless
+threshold Combine path no longer materialises the FIPS 205 master
+under a named `seed` / `skSeed` / `skPrf` variable in the public
+combiner's scope. The path is implemented at
+`ref/go/pkg/magnetar/thbsse_assemble.go::assembleSignatureBytes`
+backed by `ref/go/pkg/magnetar/slhdsa_internal.go::slhSignAtom`
+(Magnetar-internal FIPS 205 sec 5--sec 8 walk for the SHAKE family).
+
+### Wire-format-stable refactor
+
+- Wire format (MAGS / MAGG envelopes) is UNCHANGED at v1.1. KAT
+  vectors regenerate to the same bytes.
+- THBS-SE share format, slot-guard state, equivocation evidence
+  shape, and protocol round structure are UNCHANGED.
+- API: `Combine`, `NewThbsSeKey`, `ThbsSeRound1`, etc. have the
+  SAME signatures. The strict-atom path is an internal refactor of
+  Combine's tail.
+- v1.0.0 consumers bump to v1.1.0 transparently.
+
+### Strict-atom discipline (load-bearing v1.1 invariant)
+
+The v1.1 audit grep that defines compliance:
+
+```
+grep -rE "SK\.seed|SK\.prf|sk_seed|sk_prf" ref/go/pkg/magnetar/thbsse_assemble.go
+```
+
+MUST return zero matches. Enforced by:
+
+- `TestThbsSE_StrictAtom_NoTransientSeed` (AST walk + raw-byte grep).
+- `scripts/checks/strict-atom-ast.sh` (shell gate replicating the
+  audit grep verbatim).
+- `ct/dudect/strict_atom_combine_ct_test.go::
+  TestStrictAtom_CT_NoSecretDependentBranch` (AST walk asserting no
+  secret-tagged identifier feeds an if/switch condition or an index
+  expression).
+
+See `ASSEMBLE-INVARIANT.md` for the load-bearing prose statement.
+
+### Byte-identity to circl FIPS 205
+
+The Magnetar-internal FIPS 205 sec 5--sec 8 walk is byte-equal to
+`cloudflare/circl/sign/slhdsa.SignDeterministic` for the SHAKE
+families. Pinned by `TestSlhdsaInternal_ByteEqualToCirclSign` per
+mode (SHAKE-192s, SHAKE-192f, SHAKE-256s).
+
+### Proof track restoration
+
+The v0.x EasyCrypt scaffolding (modelled the abandoned v0.x
+reveal-and-aggregate path; removed at v1.0) is replaced with v1.1
+strict-atom theories:
+
+- `proofs/easycrypt/Magnetar_N1_StrictAtom.ec` --- Class N1-analog
+  strict-atom byte-equality theorem.
+- `proofs/easycrypt/Magnetar_N1_SHAKE_Expand.ec` --- FIPS 205 SHAKE
+  expansion lemmas.
+- `proofs/easycrypt/Magnetar_N1_Atom_Refinement.ec` --- internal
+  refinement to circl.
+- `proofs/easycrypt/Magnetar_N4_KeyDeriveStable.ec` --- pk stability
+  under Lagrange reconstruction.
+- `proofs/easycrypt/lemmas/SLHDSA_Functional.ec` --- FIPS 205 SHAKE
+  primitive black-box specs.
+- `proofs/easycrypt/lemmas/Magnetar_CT.ec` --- abstract-level CT
+  lemma.
+- `proofs/lean/Crypto/Magnetar/StrictAtom.lean` --- Lean bridge
+  carrying the algebraic identities.
+
+Axiom budget: 5 substantive + 1 abstract-vacuous CT admit. Per
+`proofs/README.md`.
+
+### dudect harness restoration
+
+The v0.x dudect harness (modelled deleted seed-recombine surfaces;
+removed at v1.0) is replaced with a v1.1 Go-side CT static check at
+`ct/dudect/strict_atom_combine_ct_test.go`. Per-push smoke gate at
+`scripts/checks/dudect-smoke.sh`.
+
+### Benchmark (Apple M1 Max, single-goroutine, 5-of-7)
+
+Strict-atom v1.1 ns/op vs v1.0-equivalent baseline (circl-dispatched
+SignDeterministic on the Shamir-reconstructed seed):
+
+| Mode | v1.0-equivalent | v1.1 strict-atom | Delta |
+|---|---|---|---|
+| Magnetar-SHAKE-192s | 2.93 s/op | 1.43 s/op | -51% |
+| Magnetar-SHAKE-192f | 113 ms/op | 63 ms/op | -44% |
+| Magnetar-SHAKE-256s | 2.22 s/op | 2.04 s/op | -8% |
+
+The strict-atom path is FASTER because the Magnetar-internal SHAKE
+walk avoids circl's per-call PrivateKey unmarshal + state struct
+initialisation overhead.
+
+### Honest residual gap
+
+The bytes of the FIPS 205 master DO exist transiently inside the
+SHAKE-expansion output buffer (`derivedMaterial`) and the
+Lagrange-reconstruction input (`derivedExpandInput`) for the
+duration of the SHAKE absorb. A coredump or /proc/self/mem dump at
+exactly the right wall-clock instant would observe them. Closing
+this gap requires either full MPC over the SHAKE-256 hash tree
+(open research) or a TEE-attested host in the TCB
+(`luxfi/threshold/protocols/slhdsa-tee`). The strict-atom discipline
+is the strictest available without crossing into either regime;
+see `ASSEMBLE-INVARIANT.md`.
+
 ## [1.0.0] --- 2026-05-31 --- ONE construction per regime; legacy seed-recombine paths killed
 
 ### Architectural decomplecting (HONEST framing)

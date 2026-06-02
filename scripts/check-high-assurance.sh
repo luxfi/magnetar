@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Magnetar high-assurance gate --- orchestrator (per-push).
 #
-# At v1.0.0 Magnetar's high-assurance scope is:
+# At v1.1.0 Magnetar's high-assurance scope is:
 #
 #   - Single-party SLH-DSA via cloudflare/circl/sign/slhdsa v1.6.3.
-#     CT posture inherits CIRCL. See ct/README.md.
+#     CT posture inherits CIRCL for the per-validator standalone path.
+#     See ct/README.md.
 #   - THBS-SE share arithmetic over GF(257). Straight-line modular
 #     arithmetic with constant-time intent (no secret-dependent
 #     branches). See thbsse_field.go.
-#
-# The v0.x EC + Jasmin + dudect harnesses that modeled the
-# abandoned reveal-and-aggregate path have been removed. The v1.1
-# proof + dudect track lands alongside the strict-atom-assembly
-# construction.
-#
-# v1.0 per-push gate: go-tests.sh. The rest of the proof track
-# lands at v1.1 (see BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11 and
-# MAGNETAR-DUDECT-V11).
+#   - THBS-SE strict-atom Combine path: Magnetar-internal FIPS 205
+#     sec 5/6/7/8 walk over a positional SHAKE-expansion buffer with
+#     no named transient seed binder. See thbsse_assemble.go +
+#     slhdsa_internal.go.
+#   - dudect harness on the strict-atom path (ct/dudect/).
+#   - EasyCrypt theory shells covering the strict-atom byte-equality
+#     theorem (proofs/easycrypt/Magnetar_N1_StrictAtom.ec) + the FIPS
+#     205 SHAKE expansion + the Magnetar-internal refinement to circl.
 #
 # Any per-check failure (exit 2) fails the orchestrator with the
 # same code. Per-check skips (exit 0 with a [skip] message) do not
@@ -29,11 +29,15 @@ cd "$REPO_ROOT"
 
 CHECKS=(
     "scripts/checks/go-tests.sh"
+    "scripts/checks/strict-atom-ast.sh"
+    "scripts/checks/easycrypt-smoke.sh"
+    "scripts/checks/dudect-smoke.sh"
 )
 
-echo "==> Magnetar high-assurance track (v1.0.0 scope)"
-echo "    construction: per-validator standalone + THBS-SE"
-echo "    proof track : ports to THBS-SE at v1.1 (see BLOCKERS.md)"
+echo "==> Magnetar high-assurance track (v1.1.0 scope)"
+echo "    construction: per-validator standalone + THBS-SE strict-atom"
+echo "    proof track : EasyCrypt + Lean bridge (strict-atom byte-equality)"
+echo "    CT track    : dudect on strict-atom Combine path"
 echo
 
 OVERALL=0
