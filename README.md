@@ -1,12 +1,13 @@
-# Magnetar v1.0 --- SLH-DSA (FIPS 205) for Lux
+# Magnetar v1.1 --- SLH-DSA (FIPS 205) for Lux
 
-Magnetar v1.0 ships ONE construction surface to each of the two
-deployment regimes Lux ecosystem chains need:
+Magnetar v1.1 ships ONE construction surface to each of the two
+deployment regimes Lux ecosystem chains need, with the strict-atom
+Combine path closing `MAGNETAR-STRICT-ATOM-V11`:
 
 | Regime | Construction | Where it lives |
 |---|---|---|
 | Public-BFT consensus on Lux L1/L2 (mainnet, testnet, devnet, white-label) | **Per-validator standalone** --- each validator holds its own FIPS 205 keypair, signs independently, consensus collects N signatures into a `ValidatorAggregateCert` | `ref/go/pkg/magnetar/standalone.go` |
-| Permissionless t-of-n threshold for verifier-side single-signature certificates | **THBS-SE** (Threshold Hash-Based Signatures with Selected-Element Reconstruction) --- t-of-n committee, slot-bound commit-and-reveal, anyone-can-combine public combiner | `ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go` |
+| Permissionless t-of-n threshold for verifier-side single-signature certificates | **THBS-SE (strict-atom Combine)** --- t-of-n committee, slot-bound commit-and-reveal, anyone-can-combine public combiner, Magnetar-internal FIPS 205 sec 5--sec 8 walk with no named transient seed binder | `ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go` + `thbsse_assemble.go` + `slhdsa_internal.go` |
 
 Both produce FIPS 205 wire bytes that an unmodified verifier accepts.
 
