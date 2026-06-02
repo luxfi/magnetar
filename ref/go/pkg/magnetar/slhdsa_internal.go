@@ -262,11 +262,15 @@ func (a *adrsBuf) setTreeIndex(i uint32) {
 }
 
 // =====================================================================
-//  PRF callback (the strict-atom seam)
+//
+//	PRF callback (the strict-atom seam)
+//
 // =====================================================================
 //
 // prfOutFn is the FIPS 205 §11.2 PRF for SHAKE:
-//   PRF(PK.seed, ADRS, X) = SHAKE256(PK.seed || ADRS || X)[:n]
+//
+//	PRF(PK.seed, ADRS, X) = SHAKE256(PK.seed || ADRS || X)[:n]
+//
 // where X is the n-byte secret seed material per FIPS 205 §6.2 and §5.
 //
 // The strict-atom Combine path (thbsse_assemble.go) installs a closure
@@ -282,7 +286,9 @@ func (a *adrsBuf) setTreeIndex(i uint32) {
 type prfOutFn func(out []byte, addr *adrsBuf)
 
 // prfMsgFn is the FIPS 205 §11.2 PRF_msg for SHAKE:
-//   PRF_msg(SK.prf, optRand, M) = SHAKE256(SK.prf || optRand || M)[:n]
+//
+//	PRF_msg(SK.prf, optRand, M) = SHAKE256(SK.prf || optRand || M)[:n]
+//
 // SK.prf is the message-randomizer key half of the FIPS 205 expanded
 // material; it is hosted by the strict-atom atom bag for the same
 // reason X is.
@@ -384,12 +390,12 @@ func nextHTIndex(idxTree *[3]uint32, n uint32) (idxLeaf uint32) {
 
 // wotsChain implements the FIPS 205 §5 Algorithm 5 chain function:
 //
-//   chain(X, i, s, PK.seed, ADRS):
-//     tmp ← X
-//     for j ∈ [i, i+s):
-//       ADRS.SetHashAddress(j)
-//       tmp ← F(PK.seed, ADRS, tmp)
-//     return tmp
+//	chain(X, i, s, PK.seed, ADRS):
+//	  tmp ← X
+//	  for j ∈ [i, i+s):
+//	    ADRS.SetHashAddress(j)
+//	    tmp ← F(PK.seed, ADRS, tmp)
+//	  return tmp
 //
 // X is the chain base (n bytes). The caller is responsible for the
 // outer address state; this routine mutates only the hash-address word.
@@ -885,9 +891,9 @@ func forsPkFromSig(
 //   - message:  the user message bytes
 //   - ctx:      the FIPS 205 §10.2 context string (<= 255 bytes)
 //   - prfOut:   the secret-side PRF (FIPS 205 §11.2) — the only seam
-//               for SK.seed access
+//     for SK.seed access
 //   - prfMsg:   the message-randomizer PRF — the only seam for SK.prf
-//               access
+//     access
 //
 // Output: the signatureSize-byte FIPS 205 wire signature.
 func slhSignAtom(
@@ -903,7 +909,7 @@ func slhSignAtom(
 
 	// FIPS 205 §10.2 Algorithm 23 — bind ctx to msgPrime.
 	msgPrime := make([]byte, 0, 2+len(ctx)+len(message))
-	msgPrime = append(msgPrime, 0)               // domain separator: pure
+	msgPrime = append(msgPrime, 0)              // domain separator: pure
 	msgPrime = append(msgPrime, byte(len(ctx))) // ctx length
 	msgPrime = append(msgPrime, ctx...)
 	msgPrime = append(msgPrime, message...)

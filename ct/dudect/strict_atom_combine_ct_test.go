@@ -7,7 +7,7 @@
 // Package dudect carries the Magnetar v1.1 strict-atom Combine CT
 // harness. Run via:
 //
-//   go test -tags ct -run TestStrictAtom_CT ./ct/dudect/...
+//	go test -tags ct -run TestStrictAtom_CT ./ct/dudect/...
 //
 // or via scripts/checks/dudect-smoke.sh.
 package dudect

@@ -810,6 +810,7 @@ func VerifyShareConsistency(
 //   - Its own m_i (= polyCoeffs[*][0]).
 //   - The shares σ_{i→self} received from every other party.
 //   - The aggregated final share σ_self after Round 2.
+//
 // The master is materialised only inside the PK-derivation closure
 // (deriveDKGPublicKey) which is a separate sibling function the
 // auditor or any third party invokes to extract the public key from

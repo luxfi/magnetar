@@ -57,7 +57,7 @@ import (
 //   - key.Shares[i].Share     = thbsseShareToBytes(aggregated share);
 //     byte-equal for the same implicit master.
 //   - key.SetupTranscript     = cSHAKE256(pk_bytes || n || t ||
-//                                          committee[i]...) per the
+//     committee[i]...) per the
 //     same canonical hash NewThbsSeKey uses.
 //
 // If the qualified set has fewer than threshold parties, returns

@@ -575,4 +575,3 @@ func compareNodeIDs(a, b NodeID) int {
 	}
 	return 0
 }
-
