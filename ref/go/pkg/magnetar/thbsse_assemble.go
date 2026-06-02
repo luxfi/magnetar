@@ -243,7 +243,7 @@ func assembleSignatureBytes(
 // makePRFClosure returns a prfOutFn that implements FIPS 205 §11.2 PRF
 // for SHAKE:
 //
-//   PRF(PK.seed, ADRS, X) = SHAKE256(PK.seed || ADRS || X)[:n]
+//	PRF(PK.seed, ADRS, X) = SHAKE256(PK.seed || ADRS || X)[:n]
 //
 // The `secretSegment` argument is the first n bytes of the SHAKE-
 // expanded master material — the X portion of every PRF absorb.
@@ -278,7 +278,8 @@ func makePRFClosure(p *internalParams, pkSeed, secretSegment []byte) prfOutFn {
 // makePRFMsgClosure returns a prfMsgFn that implements FIPS 205 §11.2
 // PRF_msg for SHAKE:
 //
-//   PRF_msg(key, optRand, M) = SHAKE256(key || optRand || M)[:n]
+//	PRF_msg(key, optRand, M) = SHAKE256(key || optRand || M)[:n]
+//
 // where `key` is the second positional segment of the FIPS 205 SHAKE
 // expansion of the master.
 //

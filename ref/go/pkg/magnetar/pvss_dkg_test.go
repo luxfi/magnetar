@@ -416,12 +416,13 @@ func synthesiseDealerShares(t *testing.T, params *Params, threshold int, committ
 // adversary's marginal distribution over M is uniform over GF(257)^L.
 //
 // Operationally we test by:
-//   (1) Running a DKG.
-//   (2) Picking (t-1) random parties and treating them as corrupted.
-//   (3) Reconstructing the adversary's "best guess" at M from those
-//       parties' contributions alone — i.e. Σ_{i ∈ corrupted} m_i.
-//   (4) Asserting that the partial sum is NOT byte-equal to the full
-//       reconstructed master.
+//
+//	(1) Running a DKG.
+//	(2) Picking (t-1) random parties and treating them as corrupted.
+//	(3) Reconstructing the adversary's "best guess" at M from those
+//	    parties' contributions alone — i.e. Σ_{i ∈ corrupted} m_i.
+//	(4) Asserting that the partial sum is NOT byte-equal to the full
+//	    reconstructed master.
 //
 // The probability of accidental byte-equality is (1/257)^L ≈ 2^-768
 // for L=96.
@@ -494,11 +495,11 @@ func TestPVSS_DKG_AdversarialReveals(t *testing.T) {
 // malicious party who publishes a commitment that does not open to
 // their distributed shares. The test asserts:
 //
-//   (1) VerifyContribution detects the inconsistency.
-//   (2) RunDKGSimulation drops the malicious party from Q.
-//   (3) If |Q| ≥ threshold, the protocol terminates with valid output.
-//   (4) If |Q| < threshold, the protocol fails cleanly with
-//       ErrPVSSQuorumLost.
+//	(1) VerifyContribution detects the inconsistency.
+//	(2) RunDKGSimulation drops the malicious party from Q.
+//	(3) If |Q| ≥ threshold, the protocol terminates with valid output.
+//	(4) If |Q| < threshold, the protocol fails cleanly with
+//	    ErrPVSSQuorumLost.
 //
 // We test both regimes: (n=5, t=3, 1 malicious) where |Q|=4≥t and
 // (n=5, t=4, 2 malicious) where |Q|=3<t.

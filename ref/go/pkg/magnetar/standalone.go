@@ -337,9 +337,9 @@ func runtimeGOMAXPROCS() int {
 //
 // Wire layout (canonical, parallel-slices form):
 //
-//   Mode || N || Signers[0] || ... || Signers[N-1]
-//        || PubKeys[0] || ... || PubKeys[N-1]
-//        || Sigs[0] || ... || Sigs[N-1]
+//	Mode || N || Signers[0] || ... || Signers[N-1]
+//	     || PubKeys[0] || ... || PubKeys[N-1]
+//	     || Sigs[0] || ... || Sigs[N-1]
 //
 // where:
 //   - Mode is one byte.

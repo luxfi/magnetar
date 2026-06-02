@@ -85,14 +85,14 @@ func runRound1Across(t *testing.T, params *Params, key *ThbsSeKey, binding *Thbs
 // three SLH-DSA SHAKE parameter sets, on a t=3, n=5 committee.
 //
 // The flow:
-//   1. NewThbsSeKey produces (PK, shares) for (n=5, t=3).
-//   2. Three honest signers run Round 1 + Round 2 against the slot
-//      binding and the message.
-//   3. A public combiner (anyone) calls Combine with the assembled
-//      Round-1 / Round-2 messages plus the published ThbsSeKey.
-//   4. The returned Signature.Bytes is fed DIRECTLY to circl's
-//      slhdsa.Verify with the ctx = ctxFromSlot(binding). No
-//      Magnetar code path is hit on the verifier side.
+//  1. NewThbsSeKey produces (PK, shares) for (n=5, t=3).
+//  2. Three honest signers run Round 1 + Round 2 against the slot
+//     binding and the message.
+//  3. A public combiner (anyone) calls Combine with the assembled
+//     Round-1 / Round-2 messages plus the published ThbsSeKey.
+//  4. The returned Signature.Bytes is fed DIRECTLY to circl's
+//     slhdsa.Verify with the ctx = ctxFromSlot(binding). No
+//     Magnetar code path is hit on the verifier side.
 //
 // PASS ⇔ the combiner produced a wire-canonical FIPS 205 signature
 // for every supported mode.
