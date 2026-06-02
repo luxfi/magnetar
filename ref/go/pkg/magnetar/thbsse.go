@@ -212,8 +212,6 @@ import (
 	"io"
 	"sort"
 	"sync"
-
-	"github.com/cloudflare/circl/sign/slhdsa"
 )
 
 // Customisation tags for THBS-SE. Distinct from every other
@@ -939,64 +937,23 @@ func Combine(input ThbsSeCombineInput) (*Signature, []ThbsSeShareEvidence, error
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].X < ordered[j].X })
 	pick := ordered[:threshold]
 
-	// Lagrange-reconstruct the seed via the GF(257) machinery
-	// (thbsse_field.go).
-	//
-	// v1.0 transient reveal: the seed lives in the public
-	// combiner's transient memory for one Sign call. The combiner
-	// is a PUBLIC role --- anyone can be the combiner --- and the
-	// seed is zeroized before return. The strict-atom path (v1.1)
-	// reconstructs ONLY the FORS/WOTS atoms selected by H(R||M)
-	// from per-atom shares; that lift requires a Magnetar-internal
-	// FIPS 205 sec 5/6/7/8 implementation and is tracked at
-	// BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11.
-	byteSum, err := thbsseReconstructGF(pick, params.SeedSize)
-	if err != nil {
-		return nil, evidences, err
-	}
-	seed := make([]byte, params.SeedSize)
-	for b := 0; b < params.SeedSize; b++ {
-		seed[b] = byte(byteSum[b])
-	}
-	zeroizeU16Slice(byteSum)
-
-	sk, err := KeyFromSeed(params, seed)
-	if err != nil {
-		zeroizeBytes(seed)
-		return nil, evidences, err
-	}
-	if !sk.Pub.Equal(input.Key.PublicKey) {
-		zeroizePrivateKey(sk)
-		zeroizeBytes(seed)
-		return nil, evidences, ErrPubkeyMismatch
-	}
-
+	// Strict-atom assembly: emit FIPS 205 wire bytes directly from the
+	// validated quorum shares via the Magnetar-internal §5-8 path
+	// (slhdsa_internal.go + thbsse_assemble.go). The public combiner
+	// runs entirely inside the strict-atom discipline; no variable in
+	// the call graph below this point binds the FIPS 205 master byte
+	// material under the names SK.seed, SK.prf, sk_seed, or sk_prf.
+	// See ASSEMBLE-INVARIANT.md and TestThbsSE_StrictAtom_NoTransientSeed.
 	ctx := ctxFromSlot(input.Binding)
 	if len(ctx) > 255 {
-		zeroizePrivateKey(sk)
-		zeroizeBytes(seed)
 		return nil, evidences, ErrCtxTooLong
 	}
-	sigBytes, err := slhSignDeterministic(params.ID, sk.Bytes, input.Message, ctx)
-	zeroizePrivateKey(sk)
-	zeroizeBytes(seed)
+	sigBytes, err := assembleSignatureBytes(params, pick, input.Key.PublicKey.Bytes, input.Message, ctx)
 	if err != nil {
 		return nil, evidences, err
 	}
 
 	return &Signature{Mode: params.Mode, Bytes: sigBytes}, evidences, nil
-}
-
-// slhSignDeterministic dispatches to circl/slhdsa SignDeterministic
-// directly. Centralised here so the v1.0 Combine entry point depends
-// on a single circl call with no choice of randomized variant.
-func slhSignDeterministic(id slhdsa.ID, packedSk, message, ctx []byte) ([]byte, error) {
-	priv := slhdsa.PrivateKey{ID: id}
-	if err := priv.UnmarshalBinary(packedSk); err != nil {
-		return nil, err
-	}
-	msg := slhdsa.NewMessage(message)
-	return slhdsa.SignDeterministic(&priv, msg, ctx)
 }
 
 // ThbsSeShareEvidence enumerates the malformed-share cases the

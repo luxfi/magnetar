@@ -1,7 +1,7 @@
 // Copyright (C) 2025-2026, Lux Industries Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-// Package magnetar implements the Magnetar v1.0 hash-based
+// Package magnetar implements the Magnetar v1.1 hash-based
 // post-quantum signature primitives over FIPS 205 SLH-DSA.
 // Magnetar ships TWO production primitives:
 //
@@ -68,7 +68,17 @@
 // tree (open research, multi-second per signature). The
 // per-validator standalone path sidesteps the question by
 // emitting N independent signatures; THBS-SE accepts (a) via a
-// PUBLIC combiner role (anyone can combine; no host in TCB) and
-// pins the strict-atom-assembly path (the v1.1 goal where no
-// combiner ever holds the seed) at BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11.
+// PUBLIC combiner role (anyone can combine; no host in TCB).
+//
+// At v1.1 (this release) the strict-atom-assembly Combine path
+// closes MAGNETAR-STRICT-ATOM-V11: no variable in
+// thbsse_assemble.go binds the FIPS 205 master under any of the
+// four sentinel patterns from the audit grep. The intermediate
+// SHAKE-expansion bytes exist only as positional slices of a
+// transient `derivedMaterial` buffer that is zeroized before the
+// signature is returned. See ASSEMBLE-INVARIANT.md for the
+// load-bearing prose statement and the residual gap (the bytes do
+// exist transiently inside the SHAKE absorb scratch; closing this
+// gap requires either full MPC over SHA-3 or a TEE in the TCB
+// — both out of scope for the permissionless Magnetar surface).
 package magnetar
