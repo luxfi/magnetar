@@ -225,6 +225,16 @@ M-LWE + Corona R-LWE) with hash-based PQ (Magnetar SLH-DSA).
 - `LICENSING.md` --- license terms.
 - `SUBMISSION.md` / `NIST-SUBMISSION.md` / `SUBMISSION-STATUS.md` ---
   NIST MPTC submission framework.
+- `AUDIT-2026-06.md` --- 2026-06 production-readiness audit
+  (public-permissionless-chain safety, TEE integration story,
+  GPU acceleration story, canonical-name positioning).
+- `TEE-INTEGRATION.md` --- TEE-attested production surface spec
+  (SEV-SNP today, TDX + NRAS post-#222, operator-side wiring).
+- `GPU-PORT-PLAN.md` --- v1.3 GPU acceleration port plan (four
+  batched FIPS 205 hash-tree kernels at
+  `lux-private/gpu-kernels/ops/crypto/slhdsa/`).
+- `SECURITY.md` --- threat model + strict-PQ profile closure.
+- `ASSEMBLE-INVARIANT.md` --- strict-atom Combine invariant.
 
 ## Build
 
