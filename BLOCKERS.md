@@ -227,6 +227,53 @@ external audit should target the THBS-SE construction shape, the
 strict-atom-assembly path, and the leaderless PVSS-DKG setup, all
 of which land at v1.1.
 
+## v1.3 / v1.4 work items (proposed 2026-06-03 audit)
+
+### MAGNETAR-GPU-PORT-V13 --- Batched FIPS 205 hash-tree GPU kernels
+
+**Status:** PROPOSED. Scope: v1.3.
+
+Land four batched SHAKE256-based kernels at
+`lux-private/gpu-kernels/ops/crypto/slhdsa/` and wire through
+`luxcpp/gpu` to the magnetar `slhSignAtom` substrate. Kernels:
+
+- `magnetar_wotsplus_chain_batch` --- FIPS 205 §5 chain
+  (CPU `wotsChain`).
+- `magnetar_fors_subtree_batch` --- FIPS 205 §8.2 FORS subtree
+  (CPU `forsNodeCompute`).
+- `magnetar_xmss_subtree_batch` --- FIPS 205 §6.1 XMSS subtree
+  (CPU `xmssNodeCompute`).
+- `magnetar_hmsg_prfmsg_batch` --- FIPS 205 §11.2 SHAKE H_msg /
+  PRF_msg (CPU `hMsgPub` and `prfMsg` callback).
+
+Full design + throughput estimates + 5-backend file layout
+in `GPU-PORT-PLAN.md`.
+
+Consumers: high-throughput bridge custody signing, N=100+
+aggregate-cert verification, slashing-evidence sweep across
+historical blocks. NOT required for consensus-rate signing
+(~1 sig/block CPU-bound on commodity hardware is sufficient).
+
+### MAGNETAR-PROACTIVE-RESHARE-V13 --- Zero-secret refresh
+
+**Status:** PROPOSED. Scope: v1.3.
+
+Augment the PVSS-DKG with proactive resharing against the same
+group public key. Lifts the static-corruption bound to a
+refresh-window-bounded adaptive-corruption bound. Share envelope
+shape is forward-compatible; no wire break.
+
+### MAGNETAR-APPLE-SE-HSM-V14 --- Apple Keychain SE-only hsm.Provider
+
+**Status:** PROPOSED. Scope: v1.4.
+
+`hsm.Provider` implementation backed by Apple Keychain with
+`kSecAttrAccessControl = kSecAccessControlSecureEnclaveOnly`.
+Tests can mock; production Apple Silicon hosts get a first-class
+HSM substrate that layers BELOW the attestation chain (the
+Apple SE is NOT a substitute for SEV-SNP / TDX / NRAS
+attestation, it is the at-rest seed wrap).
+
 ## Cross-references
 
 - v1.0 construction spec: `THBS-SPEC.md`
@@ -234,3 +281,6 @@ of which land at v1.1.
 - v1.0 proof track: `proofs/README.md`
 - v1.0 CT track: `ct/README.md`
 - v1.0 release notes: `CHANGELOG.md` v1.0.0 entry
+- v1.2 audit: `AUDIT-2026-06.md`
+- v1.3 TEE integration spec: `TEE-INTEGRATION.md`
+- v1.3 GPU port plan: `GPU-PORT-PLAN.md`
