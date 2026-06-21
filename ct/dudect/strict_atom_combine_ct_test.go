@@ -4,12 +4,37 @@
 //go:build ct
 // +build ct
 
-// Package dudect carries the Magnetar v1.1 strict-atom Combine CT
-// harness. Run via:
+// Package dudect carries a Magnetar source-hygiene LINT. Run via:
 //
-//	go test -tags ct -run TestStrictAtom_CT ./ct/dudect/...
+//	go test -tags ct -run TestStrictAtom_IdentHygiene ./ct/dudect/...
 //
 // or via scripts/checks/dudect-smoke.sh.
+//
+// =====================================================================
+//
+//	THIS IS NOT A CONSTANT-TIME TEST. IT IS A NAME LINT.
+//
+// =====================================================================
+//
+// The check below parses the Combine emit-path sources and asserts
+// that no identifier whose NAME is in a hardcoded list feeds an `if`,
+// a `switch`, or an index expression. That is a property of variable
+// NAMES, not of timing or memory-access behavior:
+//
+//   - It does NOT measure execution time (no dudect, no statistical
+//     test, no cycle counting).
+//   - It does NOT track data flow: a secret that flows into a branch
+//     under a name NOT in the list is invisible to it.
+//   - It does NOT establish constant-timeness of any function.
+//
+// More fundamentally, constant-time is the WRONG property to assert
+// for this path at all: `assembleSignatureBytes` reconstructs the
+// full FIPS 205 master into `derivedMaterial`. A timing side-channel
+// is moot when the secret is already sitting in plaintext in the
+// combiner's buffer (see BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11 and
+// ASSEMBLE-INVARIANT.md). Treat this file as an identifier-style lint
+// that keeps the named scratch buffers out of obvious branch/index
+// positions, and nothing more.
 package dudect
 
 import (
@@ -30,16 +55,13 @@ var strictAtomSources = []string{
 	"../../ref/go/pkg/magnetar/slhdsa_internal.go",
 }
 
-// secretTaggedIdent patterns. The v1.1 CT discipline says: any
-// identifier whose name is one of these is carrying secret bytes,
-// and therefore must NOT appear in:
-//   - a switch / if-else condition (control flow on secret)
-//   - an index expression LHS (array/slice index on secret)
-//   - a map key (map lookup on secret)
-//
-// The strict-atom emit path uses these names verbatim for the buffers
-// holding Lagrange-reconstructed material; the static check ensures
-// they are only consumed via `append`, `copy`, and `Write` calls.
+// secretTaggedIdent patterns. This is a NAME list, not a taint
+// analysis. The lint flags an identifier ONLY when its spelling
+// appears in this set AND it sits in a branch/index position. A
+// secret carried under any other name is not detected. This catches
+// nothing about timing; it is a style guard that keeps these
+// specific scratch-buffer names out of obvious control-flow / index
+// positions.
 var secretTaggedIdents = map[string]struct{}{
 	"derivedMaterial":      {},
 	"derivedExpandInput":   {},
@@ -49,11 +71,14 @@ var secretTaggedIdents = map[string]struct{}{
 	"prfMsgAbsorb":         {},
 }
 
-// TestStrictAtom_CT_NoSecretDependentBranch is the load-bearing per-push
-// CT gate. It parses the strict-atom emit-path sources, walks the AST,
-// and asserts no secret-tagged identifier feeds a control-flow branch,
-// an index expression, or a map key.
-func TestStrictAtom_CT_NoSecretDependentBranch(t *testing.T) {
+// TestStrictAtom_IdentHygiene_NoNamedBufferInBranch is an
+// identifier-hygiene LINT (NOT a constant-time property, NOT a
+// security gate). It parses the Combine emit-path sources, walks the
+// AST, and asserts no identifier whose NAME is in secretTaggedIdents
+// feeds a control-flow branch or an index expression. See the package
+// banner: this measures nothing about timing and proves nothing about
+// confidentiality.
+func TestStrictAtom_IdentHygiene_NoNamedBufferInBranch(t *testing.T) {
 	for _, rel := range strictAtomSources {
 		t.Run(filepath.Base(rel), func(t *testing.T) {
 			abs, err := filepath.Abs(rel)
@@ -103,9 +128,9 @@ func TestStrictAtom_CT_NoSecretDependentBranch(t *testing.T) {
 
 			if len(violations) > 0 {
 				for _, v := range violations {
-					t.Errorf("strict-atom CT violation: %s", v)
+					t.Errorf("strict-atom ident-hygiene lint: %s", v)
 				}
-				t.Fatalf("%d strict-atom CT violation(s) in %s",
+				t.Fatalf("%d strict-atom ident-hygiene lint hit(s) in %s",
 					len(violations), rel)
 			}
 		})

@@ -1,286 +1,187 @@
 # Magnetar --- Blockers
 
-Honest enumeration of what remains open at each release.
+Honest enumeration of what is sound, what is open, and what was
+falsely marked closed.
 
-## v1.2 ship state (current)
+## Deployment model (the product decision)
 
-v1.2 closes `MAGNETAR-PVSS-DKG-V11` --- the leaderless PVSS-DKG that
-removes the trusted dealer from the THBS-SE setup. The v1.2 ship
-state is the first Magnetar release with a fully dealerless setup
-path; the dealer-path `NewThbsSeKey` is retained for KAT
-reproducibility but is no longer recommended for production.
+Magnetar ships ONE construction to each of three deployment regimes:
 
-The two paths emit byte-shape-identical share envelopes (pinned by
-`TestPVSS_DKG_ByteCompatWithDealerPath`), so already-deployed share
-material is forward-compatible with the dealerless setup.
+| Regime | Construction | Posture |
+|---|---|---|
+| **Permissionless public-BFT (DEFAULT, production)** | Per-validator standalone (`standalone.go`) | SOUND. Each validator holds its own FIPS 205 keypair, signs independently; consensus collects N signatures into a `ValidatorAggregateCert`. No DKG, no dealer, no reconstruction anywhere. |
+| **Trusted-hardware / custody (opt-in, production)** | TEE-attested combiner pool (`luxfi/threshold/protocols/slhdsa-tee`) | SOUND under an explicit, honest trust model: the whole seed is reconstructed INSIDE a measured enclave on t hosts that must agree. This is TRUST-RELOCATION (it adds a host to the TCB), NOT MPC. |
+| **Permissionless threshold THBS-SE (RESEARCH-ONLY)** | `thbsse.go` + `thbsse_assemble.go` + PVSS-DKG | RESEARCH-GRADE. The public combiner reconstructs the full FIPS 205 master every signature. Do NOT present as production or "no host in the TCB at sign time". |
 
-## v1.1 ship state (historical)
+The hash-based-signature literature is unambiguous that this is
+fundamental (Cozzo-Smart EUROCRYPT 2019; Bonte-Smart-Tan 2023; NIST IR
+8214): SLH-DSA has no aggregatable structure, so one FIPS 205-shaped
+signature from shares requires either reconstructing the seed at some
+party or full MPC over the SHAKE hash tree. Magnetar's PRIMARY
+production answer (per-validator standalone) sidesteps the dilemma by
+emitting N independent signatures.
 
-v1.1 closed the v1.0 strict-atom + proof-track + dudect open items.
-See `CHANGELOG.md` v1.1.0 for the closure summary.
+## OPEN --- MAGNETAR-STRICT-ATOM --- THBS-SE reconstructs the master
 
-## v1.0 ship state
+**Status: OPEN. (Previously, and falsely, marked CLOSED.)**
 
-The two primitives shipped at v1.0 are:
+`assembleSignatureBytes` (`thbsse_assemble.go`) reconstructs the full
+FIPS 205 master at the public combiner: it Lagrange-interpolates the
+shares into `derivedExpandInput`, SHAKE-expands them into
+`derivedMaterial` (= skSeed || skPrf || pkSeed), and drives the FIPS
+205 §5--§8 walk reading positional slices of that buffer
+(`ASSEMBLE-INVARIANT.md`). The whole private key is resident in the
+combiner's memory for one Sign call.
 
-- **Per-validator standalone**
-  (`ref/go/pkg/magnetar/standalone.go`) --- the public-BFT primary
-  primitive. Each validator runs `PerValidatorKeypair` and
-  `ValidatorSign`; the consensus layer collects N signatures into
-  `ValidatorAggregateCert` and verifies via `VerifyAggregateCert`.
-  This is the production-ready surface.
+The earlier "strict-atom" closure was PROOF BY RENAME: the path avoids
+*spelling* a variable `seed`, and a name-grep test/lint
+(`TestThbsSE_AssembleIdentHygiene`, `scripts/checks/strict-atom-ast.sh`)
+enforces the spelling. Renaming the buffer does not change the data.
+The "CT" gate (`ct/dudect/strict_atom_combine_ct_test.go`) is likewise
+a name lint, not a timing measurement — and constant-time is the wrong
+property to claim for a path that holds the master in plaintext.
 
-- **THBS-SE** (Threshold Hash-Based Signatures with Selected-Element
-  Reconstruction;
-  `ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go`) --- the
-  permissionless threshold companion. t-of-n committee, slot-bound
-  commit-and-reveal, anyone-can-combine public combiner, slashable
-  evidence for equivocation and malformed shares.
+**What IS true:** the emitted signature is byte-identical to
+`circl/slhdsa.SignDeterministic` on the reconstructed master (a
+correctness/interop property, pinned by
+`TestSlhdsaInternal_ByteEqualToCirclSign` and
+`TestThbsSE_StrictAtom_Combine_ByteIdentityToCircl`). That is the only
+property the path delivers. It is NOT a no-leak property.
 
-Both emit byte-identical FIPS 205 signatures any unmodified verifier
-accepts.
+**Closing it** requires full MPC over the SHAKE hash tree (open
+research; multi-second, multi-megabyte per signature) or a TEE-attested
+host in the TCB (the opt-in pool below). The permissionless THBS-SE
+path stays RESEARCH-ONLY.
 
-## Open items at v1.0
+## SOUND (with an honest trust model) --- TEE-attested combiner pool
 
-### MAGNETAR-STRICT-ATOM-V11 --- Strict per-atom THBS-SE Combine
+The strict-PQ / custody regime routes Combine through a t-of-n
+attested-combiner pool in
+`luxfi/threshold/protocols/slhdsa-tee/pool.go`, gated by the single
+profile function `magnetarRefuseUnderStrictPQ` in
+`luxfi/threshold/pkg/thresholdd/magnetar.go` (mirrors the precompile
+`contract.RefuseUnderStrictPQ` discipline: ONE function, ONE place, ONE
+refusal sentinel `slhdsatee.ErrMagnetarNoTEEAttestation`).
 
-**Status:** CLOSED at v1.1.0. See `ASSEMBLE-INVARIANT.md` for the
-load-bearing prose statement and `CHANGELOG.md` v1.1.0 for the
-release summary.
+**Honest trust model.** The seed is still RECONSTRUCTED in full — but
+inside a MEASURED ENCLAVE whose binary + firmware chain-validate to the
+vendor root (AMD KDS / Intel PCS / NVIDIA NRAS). t hosts must agree on
+the output. This is TRUST-RELOCATION: it moves the reconstruction from
+an untrusted public combiner into attested hardware, ADDING that
+hardware (and the attestation chain, and the t hosts) to the TCB. It is
+NOT MPC; no party is prevented from seeing the seed — the enclave sees
+it. Use it when you are willing to trust attested hardware; do not call
+it threshold cryptography that keeps the seed secret from every party.
 
-**Closure shape.** The v1.1 Combine path is implemented at
-`ref/go/pkg/magnetar/thbsse_assemble.go::assembleSignatureBytes`
-backed by `ref/go/pkg/magnetar/slhdsa_internal.go::slhSignAtom`
-(Magnetar-internal FIPS 205 sec 5--sec 8 walk for the SHAKE family).
-The strict-atom discipline is the four-pattern audit grep:
+**Production attestation kinds.** SEV-SNP is the only `cc/attest`
+verifier currently production-implemented. TDX / NRAS verifiers are
+stubs returning `ErrNotImplemented` (tracked at #222 stages 2--3); they
+wire through the same pool contract once shipped (an addition to
+`CombinerPoolConfig.KnownIssuers`, no magnetar-side change).
 
-```
-grep -rE "SK\.seed|SK\.prf|sk_seed|sk_prf" thbsse_assemble.go
-```
+**Pool policy defaults:** `Threshold = 2` (2-of-3 attested combiners),
+`RotationWindow = 60s` (per-member attestation freshness),
+`KnownIssuers = {"amd.sev.snp"}`.
 
-returns ZERO, enforced by `TestThbsSE_StrictAtom_NoTransientSeed`
-(AST walk + raw-byte grep) and `scripts/checks/strict-atom-ast.sh`
-(shell gate). Byte-identity to `cloudflare/circl/sign/slhdsa.
-SignDeterministic` is pinned by `TestSlhdsaInternal_ByteEqualToCirclSign`
-across all three SHAKE modes.
+**Verification gates (BUILD + PASS under `-race`).** As of the
+`luxfi/zap` bump to v0.3.1 in `luxfi/threshold` (which restores the
+`NodeConfig.TLS` field that `pkg/thresholdd` needs to build), the five
+gates build and pass under `-race`:
 
-**Residual gap.** The bytes of the FIPS 205 master DO exist
-transiently inside `derivedMaterial` (the SHAKE-expansion output
-buffer) and `derivedExpandInput` (the Lagrange-reconstructed input
-to SHAKE) for the duration of the SHAKE absorb. A coredump or
-/proc/self/mem dump at exactly the right wall-clock instant would
-observe them. Closing this gap requires either full MPC over the
-SHAKE-256 hash tree (open research; multi-second per signature) or
-a TEE-attested host in the TCB (sibling primitive at
-`luxfi/threshold/protocols/slhdsa-tee`). The strict-atom discipline
-is the strictest discipline available without crossing into either
-regime; see `ASSEMBLE-INVARIANT.md` for the honest statement.
+- `TestMagnetarCombine_StrictPQProfile_RequiresTEE` --- PASS (~77s)
+- `TestMagnetarCombine_AttestationVerified_AllowsSign` --- PASS (~95s)
+- `TestMagnetarCombine_StaleAttestation_RejectsSign` --- PASS (~128s)
+- `TestMagnetarCombine_TwoOfThreeAttestedCombiners_MatchSig` --- PASS (~94s)
+- `TestMagnetarCombine_SignatureDivergence_HardRefusal` --- PASS (~91s)
 
-**Residual closed for `strict-PQ` chain profile at 2026-06-01** via
-`luxfi/threshold/pkg/thresholdd/magnetar.go` profile gate +
-`luxfi/threshold/protocols/slhdsa-tee/pool.go` t-of-n attested-
-combiner pool. Strict-PQ chains route every Combine through a
-TEE-attested combiner whose binary + firmware chain-validate to the
-vendor root (AMD KDS / Intel PCS / NVIDIA NRAS JWKS) --- the bytes
-only ever exist inside a measured enclave. The single profile gate
-`magnetarRefuseUnderStrictPQ` mirrors the precompile-side
-`contract.RefuseUnderStrictPQ` discipline: ONE function, ONE place,
-ONE canonical refusal sentinel
-(`slhdsatee.ErrMagnetarNoTEEAttestation`, wire identifier
-`ERR_MAGNETAR_NO_TEE_ATTESTATION`). The legacy-compat profile
-retains the strict-atom commodity-host path verbatim; no caveat
-under strict-PQ. See `SECURITY.md` for the full threat-model
-statement.
+(`ok github.com/luxfi/threshold/pkg/thresholdd` ~487s under `-race`.)
+These gates exercise the profile refusal, attestation freshness, t-of-n
+agreement, and divergence-refusal logic. They do NOT change the trust
+model: the seed is reconstructed inside the enclave.
 
-**Production attestation kinds.** Strict-PQ deployments today MUST
-use SEV-SNP --- the only `cc/attest` verifier currently production-
-implemented. TDX and NRAS verifiers are stubs returning
-`ErrNotImplemented` (tracked at #222 stages 2--3); they wire through
-the same pool contract once shipped --- no magnetar-side code change
-required, only an addition to `CombinerPoolConfig.KnownIssuers`.
+## FIXED --- PVSS-DKG open-reveal leak (P2)
 
-**Pool policy defaults:** `Threshold = 2` (2-of-3 attested combiners,
-no single-host quorum), `RotationWindow = 60s` (per-member
-attestation freshness), `KnownIssuers = {"amd.sev.snp"}` (strict
-vendor pin). Operators rotating attestations re-attest each pool
-member on a per-block tick (~1s); the 60s rotation window absorbs
-~60 blocks of control-plane latency before any sign would refuse.
+**Status: FIXED for the production default; honest limits documented.**
 
-**Verification gates** (all green under `-race`):
+The earlier DKG ran in OPEN-REVEAL mode: `RunDKGSimulation` called
+`RevealMsg()` for EVERY party, and `RevealMsg()` publishes
+`PolyCoeffs[b][0] = m_i`. With every constant term public, the master
+M = Σ m_i was reconstructible by ANY observer of the transcript — not
+merely by t-1 colluding insiders. The "complaint-conditional reveal"
+was prose only.
 
-- `TestMagnetarCombine_StrictPQProfile_RequiresTEE` --- strict-PQ
-  refuses `Sign` and `Sign_Ctx`; permits `Combine_TEE` only when pool
-  is wired; profile flip is reversible + idempotent.
-- `TestMagnetarCombine_AttestationVerified_AllowsSign` --- end-to-end
-  pool drive against committed AMD Milan SEV-SNP fixture; output
-  verifies under `magnetar.VerifyBytes` (no caller awareness of the
-  pool's existence).
-- `TestMagnetarCombine_StaleAttestation_RejectsSign` --- members
-  outside rotation window refused; partial re-attestation recovers.
-- `TestMagnetarCombine_TwoOfThreeAttestedCombiners_MatchSig` ---
-  2-of-3 attested-fresh quorum surfaces signature; 1-of-3 stops.
-- `TestMagnetarCombine_SignatureDivergence_HardRefusal` --- pool
-  refuses byte-divergent quorum output (no silent winner-picking).
+**The fix (`pvss_dkg.go`):**
 
-**v1.0 ship state (archival).** Magnetar v1.0 routed the final FIPS
-205 byte production via `circl/slhdsa.SignDeterministic` on a seed
-reconstructed by the PUBLIC COMBINER (NOT a privileged aggregator).
-The seed was briefly present in the public combiner's memory for one
-Sign call and zeroized before return. The combiner role was PUBLIC.
+- Production entry `RunDKG` emits a transcript with `Reveals == nil`:
+  no constant terms are published, so M is NOT reconstructible from the
+  transcript. `tr.RevealsMaster()` is false. Regression-gated by
+  `TestPVSS_DKG_ProductionTranscriptHidesMaster` (asserts production
+  hides M, open-reveal reveals M, and the open-reveal path refuses
+  without an explicit hazard ack).
+- `VerifyDKGTranscript` dispatches on transcript type: the production
+  (no-reveal) path verifies commitment shape + setup binding and
+  qualifies well-shaped parties; the open-reveal path additionally
+  verifies shares against published reveals.
+- The leaking open-reveal simulation is renamed
+  `RunDKGSimulationOpenRevealTestOnly` and gated behind a required
+  `AckOpenRevealRevealsMaster` barrier (greppable, impossible to call
+  by accident). It is TEST/KAT only.
 
-This was materially stronger than a TEE-attested
-privileged-aggregator model (no host in the TCB; the combiner was
-a pure function any peer could run on its own substrate). v1.1
-materially tightens the discipline by replacing the seed binder
-with positional slices of a SHAKE-expansion buffer.
+**Honest limits of the fixed production path (`RunDKG` HONEST
+LIMITATIONS in code):**
 
-### MAGNETAR-PVSS-DKG-V11 --- Leaderless PVSS-DKG for THBS-SE setup
+1. **PK derivation still reconstructs M.** `pk = SLH-DSA.PK(M)` is a
+   hash tree over M; there is no way to derive it from shares without
+   reconstructing M somewhere (or TEE/MPC). `deriveDKGPublicKey`
+   reconstructs M transiently to compute pk and zeroizes it. M is not
+   published, but SOME party (whoever derives pk) holds it for an
+   instant. "No party EVER holds M" is achievable only via the TEE or
+   dealer paths. The earlier banner's "NO-MASTER-IN-MEMORY DISCIPLINE"
+   (naming a buffer `lagrangeScratch`) was the same proof-by-rename and
+   is corrected.
 
-**Status:** CLOSED at v1.2.0. See `ref/go/pkg/magnetar/pvss_dkg.go`
-for the construction, `ref/go/pkg/magnetar/key.go` for the
-`NewThbsSeKeyFromDealerlessDKG` constructor,
-`proofs/easycrypt/Magnetar_N5_PVSS_DKG.ec` for the EasyCrypt theory,
-and `CHANGELOG.md` v1.2.0 for the release summary.
+2. **No robust malicious-dealer exclusion at DKG time.** Hash
+   commitments are not openable without revealing m_i, so a recipient
+   cannot non-interactively verify a received share. The production
+   path therefore does NOT exclude malicious dealers at setup;
+   malformed shares are caught later at THBS-SE sign time (commit
+   binding; `TestThbsSE_RejectOversizedShareWireSize`,
+   `TestThbsSE_RejectTamperedShareCommitMismatch`) and via a complaint
+   that reveals only the disputed recipient's share value. For
+   adversarial committees, prefer the dealer path or the TEE pool.
 
-**Closure shape.** A Schoenmakers-style PVSS-DKG over GF(257). Each
-party i samples its own contribution m_i and a degree-(t-1)
-polynomial per byte; publishes hash-based commitments to every
-polynomial coefficient at Round 1; distributes shares to each
-recipient via authenticated point-to-point channels; reveals the
-polynomial at Round 2 alongside blinding randomness so any third
-party can verify; aggregates received shares to produce its final
-Shamir share. The implicit master M = sum_{i in Q} m_i mod 257
-byte-wise is NEVER assembled in any party's memory at any time
-during setup. The only point at which M is transiently materialised
-is inside the `deriveDKGPublicKey` closure (named `lagrangeScratch`,
-zeroized at closure exit) when an external auditor invokes
-`VerifyDKGTranscript` to derive the public key.
+Sound robust dealerless DKG would need group-homomorphic (Feldman /
+Pedersen) commitments or encrypted-shares + NIZK (proper Schoenmakers
+PVSS) — a separate construction, not attempted here.
 
-**Hard invariants enforced (regression-tested):**
+## OPEN --- Mechanized proofs (there are none)
 
-- `TestPVSS_DKG_NoSinglePartyHoldsMaster` --- exercises the full DKG
-  and asserts no party's in-memory state contains the master, with an
-  AST-walk guard on `pvss_dkg.go` against master-naming.
-- `TestPVSS_DKG_ByteCompatWithDealerPath` --- the dealerless share
-  envelopes byte-equal what the dealer path would emit for the same
-  implicit master.
-- `TestPVSS_DKG_AdversarialReveals` --- t-1 corrupted parties cannot
-  recover the master from their partial-sum view.
-- `TestPVSS_DKG_RobustnessAgainstMaliciousCommitments` --- malicious
-  parties are detected at Round 2 and excluded from Q; the protocol
-  terminates with valid output when |Q| >= t and fails cleanly with
-  `ErrPVSSQuorumLost` otherwise.
-- `TestPVSS_DKG_EndToEnd_SignAndVerify` --- the closing loop: a
-  dealerless-DKG-produced `ThbsSeKey` flows into `ThbsSeRound1` /
-  `Combine` unchanged and emits a signature that verifies under
-  unmodified `cloudflare/circl/sign/slhdsa.Verify`.
+There is NO mechanized proof of any Magnetar threshold property. The
+EasyCrypt/Lean "proof track" was vacuous (a headline theorem proved by
+`apply`-ing an axiom that restated it; lemmas of the form `X = X`; a CT
+lemma discharged by `admit`; a PVSS secrecy "theorem" with conclusion
+`true`) and has been deleted or reduced to explicitly-labeled scaffolds
+that prove nothing. See `proofs/README.md` and `PROOF-CLAIMS.md`. A
+genuine result (an abstract `slh_sign` model proven equal to the Go
+implementation) is multi-week work and is OPEN.
 
-**Production deployment.** Each party runs its own
-`NewPVSSPartyState`, broadcasts its `PublicContribution`,
-distributes its `ShareTo(j)` rows over authenticated channels, and
-publishes its `RevealMsg` at Round 2. An external auditor (or any
-party) collates the public-form payloads into a `PVSSTranscript` and
-invokes `NewThbsSeKeyFromDealerlessDKG` to assemble the final
-`ThbsSeKey`. The dealer-path `NewThbsSeKey` is retained for KAT
-reproducibility and foundation-HSM bootstrap; the wire shapes match.
+## OPEN --- External cryptographer audit
 
-### MAGNETAR-PROOF-TRACK-V11 --- THBS-SE EasyCrypt + Lean track
+No external audit. The internal sign-off
+(`CRYPTOGRAPHER-SIGN-OFF.md`) covers only the per-validator standalone
+primitive (sound) and explicitly does NOT bless the permissionless
+THBS-SE path as no-leak.
 
-**Status:** CLOSED at v1.1.0. See `proofs/easycrypt/README.md` for
-the v1.1 theory inventory and `proofs/lean-easycrypt-bridge.md` for
-the cross-reference table.
+## OPEN --- Cross-implementation FIPS 205 byte-equality
 
-**Theory files.** `Magnetar_N1_StrictAtom.ec` carries the headline
-byte-equality theorem for the strict-atom Combine path;
-`Magnetar_N1_SHAKE_Expand.ec` and `Magnetar_N1_Atom_Refinement.ec`
-discharge the supporting refinements; `lemmas/SLHDSA_Functional.ec`
-and `lemmas/Magnetar_CT.ec` provide the FIPS 205 SHAKE primitive
-definitions + CT lemma. Lean side at
-`proofs/lean/Crypto/Magnetar/StrictAtom.lean`.
-
-**Axiom budget.** 5 substantive admits + 1 abstract-vacuous CT
-admit. Cross-cites Pulsar Shamir (Lean) and Lux SHA3 (Lean) for the
-algebraic content.
-
-### MAGNETAR-DUDECT-V11 --- v1.1 dudect harness
-
-**Status:** CLOSED at v1.1.0. See `ct/dudect/README.md` for the
-methodology + Go-side gate.
-
-**Per-push gate.** `ct/dudect/strict_atom_combine_ct_test.go::
-TestStrictAtom_CT_NoSecretDependentBranch` (build tag `ct`) walks
-the strict-atom emit path's AST and asserts no secret-tagged
-identifier feeds an `if` / `switch` condition or an index
-expression. Run via `scripts/checks/dudect-smoke.sh`.
-
-**Release-time gate.** The full dudect statistical test on a
-compiled harness is documented in `ct/dudect/README.md` and is
-release-time only.
-
-### MAGNETAR-EXTERNAL-AUDIT-V11 --- External cryptographer review
-
-**Status:** OPEN. Scope: v1.1 / post-v1.1.
-
-The v0.x internal cryptographer sign-off applies to the v0.x
-construction surface, much of which has been removed. The v1.1
-external audit should target the THBS-SE construction shape, the
-strict-atom-assembly path, and the leaderless PVSS-DKG setup, all
-of which land at v1.1.
-
-## v1.3 / v1.4 work items (proposed 2026-06-03 audit)
-
-### MAGNETAR-GPU-PORT-V13 --- Batched FIPS 205 hash-tree GPU kernels
-
-**Status:** PROPOSED. Scope: v1.3.
-
-Land four batched SHAKE256-based kernels at
-`lux-private/gpu-kernels/ops/crypto/slhdsa/` and wire through
-`luxcpp/gpu` to the magnetar `slhSignAtom` substrate. Kernels:
-
-- `magnetar_wotsplus_chain_batch` --- FIPS 205 §5 chain
-  (CPU `wotsChain`).
-- `magnetar_fors_subtree_batch` --- FIPS 205 §8.2 FORS subtree
-  (CPU `forsNodeCompute`).
-- `magnetar_xmss_subtree_batch` --- FIPS 205 §6.1 XMSS subtree
-  (CPU `xmssNodeCompute`).
-- `magnetar_hmsg_prfmsg_batch` --- FIPS 205 §11.2 SHAKE H_msg /
-  PRF_msg (CPU `hMsgPub` and `prfMsg` callback).
-
-Full design + throughput estimates + 5-backend file layout
-in `GPU-PORT-PLAN.md`.
-
-Consumers: high-throughput bridge custody signing, N=100+
-aggregate-cert verification, slashing-evidence sweep across
-historical blocks. NOT required for consensus-rate signing
-(~1 sig/block CPU-bound on commodity hardware is sufficient).
-
-### MAGNETAR-PROACTIVE-RESHARE-V13 --- Zero-secret refresh
-
-**Status:** PROPOSED. Scope: v1.3.
-
-Augment the PVSS-DKG with proactive resharing against the same
-group public key. Lifts the static-corruption bound to a
-refresh-window-bounded adaptive-corruption bound. Share envelope
-shape is forward-compatible; no wire break.
-
-### MAGNETAR-APPLE-SE-HSM-V14 --- Apple Keychain SE-only hsm.Provider
-
-**Status:** PROPOSED. Scope: v1.4.
-
-`hsm.Provider` implementation backed by Apple Keychain with
-`kSecAttrAccessControl = kSecAccessControlSecureEnclaveOnly`.
-Tests can mock; production Apple Silicon hosts get a first-class
-HSM substrate that layers BELOW the attestation chain (the
-Apple SE is NOT a substitute for SEV-SNP / TDX / NRAS
-attestation, it is the at-rest seed wrap).
+Byte-equality is checked only against `cloudflare/circl`. A cross-check
+against an independent FIPS 205 reference (pq-crystals C, BoringSSL
+when SLH-DSA lands) is a tracked gap (not yet done).
 
 ## Cross-references
 
-- v1.0 construction spec: `THBS-SPEC.md`
-- v1.0 normative spec: `SPEC.md`
-- v1.0 proof track: `proofs/README.md`
-- v1.0 CT track: `ct/README.md`
-- v1.0 release notes: `CHANGELOG.md` v1.0.0 entry
-- v1.2 audit: `AUDIT-2026-06.md`
-- v1.3 TEE integration spec: `TEE-INTEGRATION.md`
-- v1.3 GPU port plan: `GPU-PORT-PLAN.md`
+- `README.md`, `DESIGN.md` --- construction overview.
+- `ASSEMBLE-INVARIANT.md` --- what the THBS-SE Combine path does.
+- `PROOF-CLAIMS.md` --- per-property proven/asserted/open breakdown.
+- `TEE-INTEGRATION.md` --- TEE-attested production surface spec.
+- `CHANGELOG.md` --- release history.

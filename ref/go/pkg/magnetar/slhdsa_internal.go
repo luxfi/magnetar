@@ -710,22 +710,6 @@ func htSign(
 	}
 }
 
-// htRootCompute computes the hypertree root (pkRoot) given pkSeed and
-// the PRF callback. Used at setup to derive the public key root from
-// the same Lagrange-reconstructed material the signer uses. FIPS 205
-// §9.1 Algorithm 18 (line 5).
-func htRootCompute(
-	p *internalParams,
-	out []byte,
-	pkSeed []byte,
-	prfOut prfOutFn,
-) {
-	addr := adrsBuf{}
-	addr.setLayerAddress(p.d - 1)
-	addr.setTreeAddress([3]uint32{0, 0, 0})
-	xmssNodeCompute(p, out, pkSeed, &addr, 0, p.hPrime, prfOut)
-}
-
 // =====================================================================
 //  FIPS 205 §8 — FORS sign + public-key reconstruction
 // =====================================================================

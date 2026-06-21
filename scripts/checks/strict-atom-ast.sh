@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# strict-atom-ast.sh --- the v1.1 AST + grep invariant gate.
+# strict-atom-ast.sh --- identifier-hygiene LINT (NOT a security gate).
 #
-# The strict-atom Combine path (ref/go/pkg/magnetar/thbsse_assemble.go)
-# is the single line of code the v1.1 audit asserts is free of any
-# named transient-seed binder. This script runs the Go-side AST gate
-# (TestThbsSE_StrictAtom_NoTransientSeed) which:
+# This runs a NAME lint over the Combine emit path
+# (ref/go/pkg/magnetar/thbsse_assemble.go): it asserts the source does
+# not SPELL a variable `seed`/`skSeed`/`skPrf`/... . It does NOT show
+# the FIPS 205 master is absent from memory --- assembleSignatureBytes
+# reconstructs the master into `derivedMaterial` regardless of variable
+# naming (see ASSEMBLE-INVARIANT.md and
+# BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11). Passing this lint is a style
+# check, not a no-leak proof.
+#
+# It runs the Go-side lint (TestThbsSE_AssembleIdentHygiene) which:
 #
 #   1. Parses thbsse_assemble.go as Go AST.
-#   2. Walks every identifier node and asserts none matches the
-#      forbidden set {seed, skSeed, skPrf, SkSeed, SkPrf, PrfKey,
-#      prfKey, sk_seed, sk_prf}.
-#   3. Defense-in-depth: scans the comment-stripped file bytes for the
-#      literal grep target from the v1.1 blocker
+#   2. Walks every identifier node and asserts none matches the named
+#      set {seed, skSeed, skPrf, SkSeed, SkPrf, PrfKey, prfKey,
+#      sk_seed, sk_prf}.
+#   3. Scans the comment-stripped file bytes for the name-pattern grep
 #      (`SK\.seed|SK\.prf|sk_seed|sk_prf`).
-#
-# The script also runs the raw audit grep against thbsse_assemble.go
-# so the exit code reflects the same check the auditor runs by hand.
 
 set -euo pipefail
 
@@ -24,32 +26,31 @@ cd "$REPO_ROOT"
 
 ASSEMBLE_PATH="ref/go/pkg/magnetar/thbsse_assemble.go"
 
-echo "==> strict-atom-ast: AST + grep invariant gate"
+echo "==> strict-atom-ast: identifier-hygiene NAME lint (NOT a security gate)"
 
 if [[ ! -f "$ASSEMBLE_PATH" ]]; then
     echo "    [error] $ASSEMBLE_PATH not found"
     exit 2
 fi
 
-# Step 1: raw audit grep, byte-for-byte equivalent to the v1.1
-# blocker's specified check.
+# Step 1: raw name-pattern grep.
 echo "    [step 1] grep -rE \"SK\\.seed|SK\\.prf|sk_seed|sk_prf\" $ASSEMBLE_PATH"
 if grep -rE "SK\.seed|SK\.prf|sk_seed|sk_prf" "$ASSEMBLE_PATH"; then
-    echo "    [fail] strict-atom grep invariant: $ASSEMBLE_PATH contains forbidden patterns"
+    echo "    [fail] ident-hygiene lint: $ASSEMBLE_PATH contains a flagged name pattern"
     exit 2
 fi
-echo "    [ok] no forbidden patterns in $ASSEMBLE_PATH"
+echo "    [ok] no flagged name patterns in $ASSEMBLE_PATH"
 
-# Step 2: Go test that wraps both the AST walk and the comment-
+# Step 2: Go lint that wraps both the AST walk and the comment-
 # stripped grep.
-echo "    [step 2] go test -count=1 -run TestThbsSE_StrictAtom_NoTransientSeed"
+echo "    [step 2] go test -count=1 -run TestThbsSE_AssembleIdentHygiene"
 cd ref/go
-if ! go test -count=1 -run TestThbsSE_StrictAtom_NoTransientSeed ./pkg/magnetar/...; then
-    echo "    [fail] TestThbsSE_StrictAtom_NoTransientSeed failed"
+if ! go test -count=1 -run TestThbsSE_AssembleIdentHygiene ./pkg/magnetar/...; then
+    echo "    [fail] TestThbsSE_AssembleIdentHygiene failed"
     exit 2
 fi
-echo "    [ok] TestThbsSE_StrictAtom_NoTransientSeed PASS"
+echo "    [ok] TestThbsSE_AssembleIdentHygiene PASS"
 cd "$REPO_ROOT"
 
-echo "==> strict-atom-ast: GATE GREEN"
+echo "==> strict-atom-ast: NAME LINT GREEN (style only; not a no-leak proof)"
 exit 0

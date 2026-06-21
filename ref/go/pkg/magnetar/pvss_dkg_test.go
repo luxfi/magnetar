@@ -19,25 +19,32 @@ import (
 
 // pvss_dkg_test.go --- Tests for the dealerless PVSS-DKG path.
 //
-// Closes BLOCKERS.md::MAGNETAR-PVSS-DKG-V11. The headline gates are:
+// Two transcript types are under test:
 //
-//   - TestPVSS_DKG_NoSinglePartyHoldsMaster: exercise the full DKG
-//     and assert no party's memory ever contains the master byte
-//     vector. The master can only be derived by an external auditor
-//     invoking VerifyDKGTranscript; in the simulation, every party's
-//     state is bounded to (own m_i, received shares, aggregated share).
+//   - PRODUCTION (RunDKG): no constant-term reveals; the master is NOT
+//     reconstructible from the transcript.
+//   - OPEN-REVEAL (RunDKGSimulationOpenRevealTestOnly): publishes every
+//     m_i; the master IS reconstructible. TEST/KAT only.
+//
+// The headline gates are:
+//
+//   - TestPVSS_DKG_ProductionTranscriptHidesMaster: the production
+//     transcript hides the master (regression gate for the P2 leak
+//     fix); the open-reveal transcript reveals it (contrast).
 //
 //   - TestPVSS_DKG_ByteCompatWithDealerPath: compare the dealerless-
 //     produced KeyShare envelopes against the dealer-path envelopes
-//     for the same implicit master. Wire-byte equality.
+//     for the same implicit master. Wire-byte equality. Uses the
+//     open-reveal path because it inspects the polynomial reveals.
 //
 //   - TestPVSS_DKG_AdversarialReveals: t-1 corrupted parties reveal
-//     their shares; remaining honest party's master contribution
-//     stays uniform in the adversary's view.
+//     their shares; the partial sum does not equal the master (entropy
+//     sanity; open-reveal path).
 //
-//   - TestPVSS_DKG_RobustnessAgainstMaliciousCommitments: wrong
-//     commitments are detected + rejected; the protocol terminates
-//     with the malicious party excluded from Q.
+//   - TestPVSS_DKG_RobustnessAgainstMaliciousCommitments: in the
+//     OPEN-REVEAL path, wrong commitments are detected + rejected. (The
+//     production path defers malformed-share detection to sign-time
+//     commit binding; see RunDKG's HONEST LIMITATIONS.)
 
 // pvssTestModes is the set of FIPS 205 parameter sets the PVSS-DKG
 // path supports. All three SHAKE modes share the same byte-share
@@ -59,23 +66,17 @@ func makePVSSCommittee(t *testing.T, n int) []NodeID {
 	return out
 }
 
-// TestPVSS_DKG_NoSinglePartyHoldsMaster is the no-master-in-memory
-// gate. The test runs a full PVSS-DKG and asserts:
+// TestPVSS_DKG_OpenRevealPartyContributionsDistinct exercises the
+// OPEN-REVEAL test path (which DOES reveal the master — see
+// RunDKGSimulationOpenRevealTestOnly) and asserts the weaker property
+// that no single party's contribution m_i happens to byte-equal the
+// aggregate master (entropy sanity), plus the source-hygiene AST check.
 //
-//  1. NewPVSSPartyState returns a state whose polyCoeffs[*][0] is
-//     the party's m_i, distinct from the eventual master.
-//  2. The simulation runner zeroizes per-party state at termination.
-//  3. The transcript's ReceivedShares are independent random-looking
-//     vectors (no single share row is the master).
-//  4. The only path to the master is via VerifyDKGTranscript's
-//     deriveDKGPublicKey closure, which materialises lagrangeScratch
-//     into a single local buffer and zeroizes it immediately.
-//
-// The test also AST-walks the pvss_dkg.go source file to assert no
-// public function returns a [seed_size]byte master, and no field of
-// PVSSPartyState exposes the master in its name. This is the structural
-// counterpart to the strict-atom AST gate for the SIGN side.
-func TestPVSS_DKG_NoSinglePartyHoldsMaster(t *testing.T) {
+// NOTE: this test does NOT establish master secrecy. The open-reveal
+// transcript publishes every m_i, so M is trivially reconstructible.
+// The production no-leak property is tested by
+// TestPVSS_DKG_ProductionTranscriptHidesMaster.
+func TestPVSS_DKG_OpenRevealPartyContributionsDistinct(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range pvssTestModes {
@@ -89,7 +90,7 @@ func TestPVSS_DKG_NoSinglePartyHoldsMaster(t *testing.T) {
 			)
 			committee := makePVSSCommittee(t, n)
 
-			tr, err := RunDKGSimulation(params, threshold, committee, nil)
+			tr, err := RunDKGSimulationOpenRevealTestOnly(AckOpenRevealRevealsMaster, params, threshold, committee, nil)
 			if err != nil {
 				t.Fatalf("RunDKGSimulation: %v", err)
 			}
@@ -128,6 +129,95 @@ func TestPVSS_DKG_NoSinglePartyHoldsMaster(t *testing.T) {
 			// deriveDKGPublicKey.
 			pvssDkgPath := mustFindPVSSDKGPath(t)
 			assertNoMasterNamingInPVSSDKG(t, pvssDkgPath)
+		})
+	}
+}
+
+// TestPVSS_DKG_ProductionTranscriptHidesMaster is the regression gate
+// for the open-reveal leak fix (P2). It asserts:
+//
+//  1. The PRODUCTION transcript (RunDKG) carries NO constant-term
+//     reveals: tr.Reveals is empty and tr.RevealsMaster() is false.
+//     An observer of the production transcript therefore cannot
+//     reconstruct Sum m_i (= M) from polynomial reveals — the leak
+//     vector is gone.
+//  2. The production transcript still derives a valid group public key
+//     and wire-compatible shares (VerifyDKGTranscript + the key
+//     constructor succeed) WITHOUT any master reveal.
+//  3. For contrast, the OPEN-REVEAL transcript DOES reveal the master
+//     (RevealsMaster() == true), confirming the two paths differ in
+//     exactly the leak property — the fix is real, not cosmetic.
+//  4. The open-reveal simulation refuses to run without the explicit
+//     hazard acknowledgement barrier.
+func TestPVSS_DKG_ProductionTranscriptHidesMaster(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range pvssTestModes {
+		mode := mode
+		t.Run(mode.String(), func(t *testing.T) {
+			t.Parallel()
+			params := MustParamsFor(mode)
+			const (
+				n         = 5
+				threshold = 3
+			)
+			committee := makePVSSCommittee(t, n)
+
+			// (1) Production transcript hides the master.
+			prod, err := RunDKG(params, threshold, committee, nil)
+			if err != nil {
+				t.Fatalf("RunDKG: %v", err)
+			}
+			if prod.RevealsMaster() {
+				t.Fatalf("production transcript reveals the master")
+			}
+			if len(prod.Reveals) != 0 {
+				t.Fatalf("production transcript carries %d reveals; want 0", len(prod.Reveals))
+			}
+			// Defense in depth: scan every reveal slot for a constant
+			// term, mirroring the on-wire reconstructability the fix
+			// removes.
+			for i := range prod.Reveals {
+				for b := range prod.Reveals[i].PolyCoeffs {
+					if len(prod.Reveals[i].PolyCoeffs[b]) > 0 {
+						t.Fatalf("production transcript leaks constant term at party %d byte %d", i, b)
+					}
+				}
+			}
+
+			// (2) Production transcript still derives a usable key with
+			// NO master reveal.
+			qualified, pk, err := VerifyDKGTranscript(prod)
+			if err != nil {
+				t.Fatalf("VerifyDKGTranscript(production): %v", err)
+			}
+			if len(qualified) < threshold {
+				t.Fatalf("production qualified set %d < threshold %d", len(qualified), threshold)
+			}
+			if pk == nil || len(pk.Bytes) != params.PublicKeySize {
+				t.Fatalf("production pk has wrong shape: %v", pk)
+			}
+			if _, err := NewThbsSeKeyFromDealerlessDKG(prod); err != nil {
+				t.Fatalf("NewThbsSeKeyFromDealerlessDKG(production): %v", err)
+			}
+
+			// (3) Contrast: the open-reveal transcript DOES reveal it.
+			open, err := RunDKGSimulationOpenRevealTestOnly(
+				AckOpenRevealRevealsMaster, params, threshold, committee, nil)
+			if err != nil {
+				t.Fatalf("RunDKGSimulationOpenRevealTestOnly: %v", err)
+			}
+			if !open.RevealsMaster() {
+				t.Fatalf("open-reveal transcript does NOT reveal the master; the two paths are indistinguishable")
+			}
+
+			// (4) The open-reveal path refuses without the ack barrier.
+			if _, err := RunDKGSimulationOpenRevealTestOnly(
+				OpenRevealAck{}, params, threshold, committee, nil); err == nil {
+				t.Fatalf("open-reveal simulation ran without the hazard acknowledgement")
+			} else if err != ErrOpenRevealNotAcknowledged {
+				t.Fatalf("want ErrOpenRevealNotAcknowledged, got %v", err)
+			}
 		})
 	}
 }
@@ -298,7 +388,7 @@ func TestPVSS_DKG_ByteCompatWithDealerPath(t *testing.T) {
 			committee := makePVSSCommittee(t, n)
 
 			// Run dealerless DKG.
-			tr, err := RunDKGSimulation(params, threshold, committee, nil)
+			tr, err := RunDKGSimulationOpenRevealTestOnly(AckOpenRevealRevealsMaster, params, threshold, committee, nil)
 			if err != nil {
 				t.Fatalf("RunDKGSimulation: %v", err)
 			}
@@ -440,7 +530,7 @@ func TestPVSS_DKG_AdversarialReveals(t *testing.T) {
 			)
 			committee := makePVSSCommittee(t, n)
 
-			tr, err := RunDKGSimulation(params, threshold, committee, nil)
+			tr, err := RunDKGSimulationOpenRevealTestOnly(AckOpenRevealRevealsMaster, params, threshold, committee, nil)
 			if err != nil {
 				t.Fatalf("RunDKGSimulation: %v", err)
 			}
@@ -675,9 +765,15 @@ func TestPVSS_DKG_EndToEnd_SignAndVerify(t *testing.T) {
 			)
 			committee := makePVSSCommittee(t, n)
 
-			tr, err := RunDKGSimulation(params, threshold, committee, nil)
+			// Production no-leak path: RunDKG emits a transcript with no
+			// constant-term reveals; the master is not reconstructible
+			// from it, yet the derived key signs and verifies.
+			tr, err := RunDKG(params, threshold, committee, nil)
 			if err != nil {
-				t.Fatalf("RunDKGSimulation: %v", err)
+				t.Fatalf("RunDKG: %v", err)
+			}
+			if tr.RevealsMaster() {
+				t.Fatalf("production RunDKG transcript reveals the master")
 			}
 			key, err := NewThbsSeKeyFromDealerlessDKG(tr)
 			if err != nil {
@@ -789,7 +885,7 @@ func TestPVSS_DKG_TranscriptTamperDetection(t *testing.T) {
 		threshold = 3
 	)
 	committee := makePVSSCommittee(t, n)
-	tr, err := RunDKGSimulation(params, threshold, committee, nil)
+	tr, err := RunDKGSimulationOpenRevealTestOnly(AckOpenRevealRevealsMaster, params, threshold, committee, nil)
 	if err != nil {
 		t.Fatalf("RunDKGSimulation: %v", err)
 	}
@@ -832,7 +928,7 @@ func TestPVSS_DKG_RaceClean(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tr, err := RunDKGSimulation(params, threshold, committee, nil)
+			tr, err := RunDKG(params, threshold, committee, nil)
 			if err != nil {
 				errs <- err
 				return

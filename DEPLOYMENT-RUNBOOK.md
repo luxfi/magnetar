@@ -9,10 +9,11 @@ Magnetar v1.0 ships **TWO distinct signing primitives** with
 different trust models. Picking the wrong one is the single largest
 deployment risk.
 
-| Primitive | Trust model | Public-BFT safe | Use case |
+| Primitive | Trust model | No-leak / sound | Use case |
 |---|---|---|---|
-| `ValidatorSign` + `VerifyAggregateCert` (per-validator standalone, `standalone.go`) | Per-validator standalone keys, no shared seed | YES | **Lux public-BFT validator quorum (PRIMARY)** |
-| `NewThbsSeKey` + `ThbsSeRound1` + `Combine` (THBS-SE, `thbsse.go`) | t-of-n committee, public combiner, no host in TCB | YES (with v1.0 open item) | Permissionless threshold signing for single-signature certificates |
+| `ValidatorSign` + `VerifyAggregateCert` (per-validator standalone, `standalone.go`) | Per-validator standalone keys, no shared seed, NO reconstruction | YES (SOUND) | **Lux public-BFT validator quorum (PRODUCTION DEFAULT)** |
+| TEE-attested combiner pool (`luxfi/threshold/protocols/slhdsa-tee`) | Seed reconstructed INSIDE a measured enclave on t hosts; trust-relocation (adds a host to the TCB), NOT MPC | YES under attested-hardware trust | Opt-in custody / single-signature certificates |
+| `NewThbsSeKey` + `ThbsSeRound1` + `Combine` (THBS-SE, `thbsse.go`) | t-of-n committee, public combiner that **RECONSTRUCTS the full FIPS 205 master every signature** | NO --- RESEARCH-GRADE; whoever runs Combine sees the seed (a host IS effectively in the TCB) | Permissionless threshold ONLY where the combiner host is trusted by policy. NOT no-leak. |
 
 ### Quick decision
 

@@ -1,17 +1,31 @@
 # NIST MPTC Submission Status --- Magnetar
 
-> **v1.0 framing.** This document is a v0.x archival snapshot. The
-> v1.0 submission shape ports to the THBS-SE construction and the
-> per-validator standalone primitive; the v0.x reveal-and-aggregate
-> path described below has been removed from the codebase. See
-> `CHANGELOG.md::[1.0.0]` for the load-bearing deletions and the
-> v1.0 construction surface.
-
-> Honest status of Magnetar's path to NIST Multi-Party Threshold
-> Cryptography submission. **Tier A documentation shape complete**
-> as of v0.3.0. Mechanized refinement, dudect, v0.4 lifecycle
-> additions (ML-KEM envelope wrap + reshare), and external audit
-> are the remaining gates to **full Tier A**.
+> ## CURRENT STATUS (authoritative; supersedes the v0.x body below)
+>
+> - **Production primitive: per-validator standalone** (`standalone.go`)
+>   --- SOUND. N independent FIPS 205 signatures; no shared seed, no
+>   reconstruction. This is what Magnetar offers for production
+>   public-BFT signing.
+> - **Opt-in production: TEE-attested combiner pool** --- sound under an
+>   attested-hardware trust model (trust-relocation, NOT MPC).
+> - **Permissionless THBS-SE: RESEARCH-ONLY.** The public combiner
+>   reconstructs the FIPS 205 master every signature
+>   (`ASSEMBLE-INVARIANT.md`). NOT no-leak. Not a standardizable
+>   threshold-SLH-DSA claim.
+> - **Mechanized proofs: NONE.** The prior EC/Lean track was vacuous and
+>   has been deleted/scaffolded (`PROOF-CLAIMS.md` §2).
+> - **PVSS-DKG open-reveal leak: FIXED** (`RunDKG`; regression-gated).
+> - The byte-identity-to-FIPS-205 property is correctness/interop, NOT a
+>   confidentiality claim.
+>
+> True no-reconstruction threshold SLH-DSA is OPEN RESEARCH. Magnetar's
+> answer for production is the standalone path, which sidesteps it.
+> See `BLOCKERS.md` and `CRYPTOGRAPHER-SIGN-OFF.md`.
+>
+> Everything below this banner is a stale v0.x archival snapshot
+> (reveal-and-aggregate, "Tier A documentation shape", v0.4/v0.5
+> roadmap). It is retained for provenance only and is NOT the current
+> status; where it conflicts with this banner, the banner wins.
 
 ## Today (v0.3.0)
 

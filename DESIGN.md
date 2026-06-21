@@ -1,130 +1,122 @@
-# Magnetar --- Public-DKG MPC Threshold SLH-DSA (research profile)
+# Magnetar --- design
 
-> **v1.0 framing.** This document is a v0.x research-profile design
-> snapshot. The v1.0 production THBS-SE construction
-> (`THBS-SPEC.md`) is the closer of "permissionless threshold SLH-DSA
-> without TEE" for Magnetar; the v1.1 strict-atom-assembly path is
-> the strict-invariant closer (`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`).
+Magnetar is the hash-based (FIPS 205 SLH-DSA) PQ leg of the Lux
+cross-family signature suite. This document states the architecture and
+why each path exists.
 
-> **Tier 3 of the Hanzo PQ Threshold Suite.** Research-track
-> construction for threshold FIPS 205 SLH-DSA via MPC. **NOT
-> production-ready. NOT part of the v0.1 NIST MPTC submission.**
+## The fundamental constraint
 
-## What this document is
+SLH-DSA is a tree of hash computations: the secret is a SHAKE seed and
+signing traverses a hypertree of one-time / few-time signatures keyed
+by that seed. There is NO linear-aggregation identity (unlike
+FROST/Schnorr or the Raccoon-style ML-DSA threshold). The literature is
+explicit:
 
-A placeholder + design-direction sketch for a future research-grade
-public-DKG threshold construction over FIPS 205 SLH-DSA. The Hanzo
-PQ Threshold Suite includes Magnetar to signal architectural intent
-without overclaiming maturity.
+- Cozzo & Smart, EUROCRYPT 2019, *Sharing the LUOV*: every internal
+  SHAKE/SHA-2 evaluation is a non-linear function of the secret seed.
+- Bonte, Smart & Tan, 2023, *Threshold SPHINCS+*: there is no efficient
+  t-of-n SLH-DSA scheme producing one FIPS 205-shaped signature without
+  either (a) reconstructing the seed in some combiner process, or (b)
+  full MPC over the SHAKE hash tree (multi-second, multi-megabyte per
+  signature).
+- NIST IR 8214: SLH-DSA is the highest threshold-MPC cost among FIPS
+  20{3,4,5}.
 
-## What this document is NOT
+True no-reconstruction threshold SLH-DSA is OPEN RESEARCH. Magnetar
+does not pretend otherwise. Instead it offers three paths chosen by
+deployment model.
 
-- Not a specification. The protocol is unfixed.
-- Not a security claim. The protocol has not been analyzed.
-- Not an implementation. No `ref/go/`-equivalent exists for Magnetar.
-- Not a NIST submission. Submitting threshold SLH-DSA as if it
-  were standardized would be inaccurate.
+## The three paths
 
-## Why Magnetar exists conceptually
+### 1. Per-validator standalone --- PRODUCTION DEFAULT (sound)
 
-SLH-DSA is hash-based and stateless (FIPS 205). Its security rests
-on different assumptions from ML-DSA: collision/preimage resistance
-of the underlying hash (SHA-2 or SHAKE), with no lattice
-assumption.
+`standalone.go`. Each validator holds its own FIPS 205 keypair, signs
+the message independently, and the consensus layer collects N
+single-party signatures into a `ValidatorAggregateCert`. Verification
+counts valid signatures against the validator-set registry; the quorum
+decision lives at the consumer.
 
-A threshold profile of SLH-DSA gives a defense-in-depth signature:
-even if ML-DSA's lattice assumption is broken in the future,
-Magnetar's hash-based threshold provides a fallback.
+This is the sound primitive: there is no shared seed, no DKG, no
+dealer, and no reconstruction anywhere. It sidesteps both (a) and (b)
+by emitting N independent signatures. Wire size is N x |sigma| (a
+Z-Chain Groth16 rollup compresses it; separate primitive).
 
-## Why this is hard
+THIS IS THE DOCUMENTED PRODUCTION PRIMITIVE for public-BFT post-quantum
+consensus.
 
-Unlike threshold schemes for discrete-log-style or lattice-based
-signatures, SLH-DSA does NOT decompose into a linear-aggregation
-identity. The signing process is a tree of hash computations
-(Merkle tree of hash-based one-time signatures), where the
-"secret" is a SHAKE seed and "signing" involves traversing the
-tree based on the message hash.
+### 2. TEE-attested combiner pool --- OPT-IN PRODUCTION (sound under attested-hardware trust)
 
-Threshold SLH-DSA constructions in the literature typically require:
-- MPC over hash computations (slow; SHAKE computed inside MPC).
-- Distributed seed generation with VSS.
-- Per-signature MPC ceremony.
+`luxfi/threshold/protocols/slhdsa-tee`. For deployments that genuinely
+need a SINGLE FIPS 205-shaped signature from a committee (custody,
+bridge signing), Magnetar routes Combine through a t-of-n
+attested-combiner pool, gated by the single profile function
+`magnetarRefuseUnderStrictPQ`.
 
-None of these match the elegance of FROST-style aggregation that
-Pulsar uses for ML-DSA. Magnetar is a research-grade direction,
-not an obvious specification target.
+Honest trust model: the seed is reconstructed in full, but INSIDE a
+measured enclave whose binary + firmware chain-validate to a vendor
+root (AMD KDS today; Intel TDX / NVIDIA NRAS are stubs). This is
+TRUST-RELOCATION --- it moves the reconstruction into attested hardware
+and ADDS that hardware (plus the attestation chain and the t hosts) to
+the TCB. It is NOT MPC and does NOT keep the seed secret from every
+party; the enclave sees it.
 
-## Suggested research direction
+### 3. Permissionless THBS-SE --- RESEARCH-ONLY
 
-1. **Distributed seed generation**: Lux-style Pedersen-VSS over
-   the SHAKE seed space (32 or 64 bytes for FIPS 205 SHAKE
-   profiles).
+`thbsse.go` + `thbsse_field.go` + `thbsse_assemble.go` +
+`slhdsa_internal.go`. A t-of-n committee, slot-bound commit-and-reveal,
+and an anyone-can-combine public combiner. The public combiner
+RECONSTRUCTS the full FIPS 205 master into one buffer every signature
+(`ASSEMBLE-INVARIANT.md`) and emits a byte-identical FIPS 205
+signature.
 
-2. **Per-signature MPC**: a multi-party Generic-Group-Model
-   ceremony to compute the SLH-DSA signature components without
-   any single party reconstructing the seed.
+Because whoever runs Combine sees the seed, there is effectively a host
+in the TCB at sign time. This path is RESEARCH-GRADE. It must not be
+presented as production or as "no host in the TCB". The earlier "strict
+-atom Combine closed the no-leak gap" claim was proof by rename (it
+avoids the variable name `seed`, not the reconstruction). See
+`BLOCKERS.md::MAGNETAR-STRICT-ATOM` (OPEN).
 
-3. **Hash precomputation amortization**: precompute layers of the
-   FORS / W-OTS+ Merkle tree in batched MPC sessions to amortize
-   the per-signature ceremony cost.
+## Setup: dealer, dealerless, or TEE
 
-4. **Identifiable abort**: same TLV-encoded evidence format as
-   Pulsar §10, with per-MPC-round per-party state.
+- **Dealer (`NewThbsSeKey`)**: one machine samples the master,
+  byte-shares it over GF(257), and zeroizes it. The dealer is in the
+  TCB for setup only. KAT-reproducible; recommended for foundation-HSM
+  bootstrap.
+- **Dealerless production (`RunDKG`)**: per-party PVSS with hash
+  commitments; the transcript carries NO constant-term reveals, so the
+  master is not reconstructible from the wire. BUT pk derivation
+  reconstructs the master transiently (inherent: `pk = SLH-DSA.PK(M)`
+  is a hash tree over M), and the path does NOT robustly exclude
+  malicious dealers at DKG time (hash commitments aren't openable
+  without revealing m_i). See `RunDKG` HONEST LIMITATIONS in
+  `pvss_dkg.go`.
+- **TEE**: routes both pk derivation and Combine through attested
+  hardware (trust-relocated).
 
-5. **Public-key preservation across resharing**: standard
-   zero-secret-refresh applied to the SHAKE seed shares.
+A leaking open-reveal DKG (`RunDKGSimulationOpenRevealTestOnly`) exists
+for KAT replay only, behind an explicit hazard acknowledgement; its
+transcript reveals the master.
 
-## Parameter-set candidates
+## Parameter sets (FIPS 205 SHAKE)
 
-If the research direction matures into a specification, the
-following parameter sets are candidates (matching FIPS 205 §4):
+| Mode | NIST Category | sig bytes |
+|---|---|---|
+| SHAKE-192s | 3 | 16224 (recommended) |
+| SHAKE-192f | 3 fast | larger sig, faster sign |
+| SHAKE-256s | 5 | 29792 |
 
-| Identifier | NIST Category | sig bytes | Notes |
-|---|---|---|---|
-| `MAGNETAR-THRESHOLD-SLH-DSA-SHAKE-128s` | 1 | 7856 | small/slow |
-| `MAGNETAR-THRESHOLD-SLH-DSA-SHAKE-192s` | 3 | 16224 | RECOMMENDED if Magnetar matures |
-| `MAGNETAR-THRESHOLD-SLH-DSA-SHAKE-256s` | 5 | 29792 | high security |
+SLH-DSA signatures are large (16-30 KB) vs ML-DSA (2-5 KB); the
+per-signature cost dominates economics, which is another reason the
+standalone path (no MPC ceremony) is the production default.
 
-Note that SLH-DSA signatures are LARGE compared to ML-DSA
-(7-30 KB vs 2-5 KB). The per-signature MPC cost will dominate
-deployment economics.
+## What is NOT claimed
 
-## Why we do not ship Magnetar in v0.1
+- No mechanized proof of any threshold property (the prior EC/Lean
+  track was vacuous; see `PROOF-CLAIMS.md`).
+- No no-leak property for THBS-SE.
+- No robust-against-malicious-dealers property for the production DKG.
+- No external audit.
 
-1. **No mature construction**: published threshold-SLH-DSA work is
-   limited and not well-reviewed.
-2. **MPC complexity**: per-signature MPC dwarfs the per-signature
-   cost of Pulsar.
-3. **Signature size**: 7-30 KB per signature is operationally
-   expensive on-chain.
-4. **Standardization status**: NIST has not signalled threshold
-   SLH-DSA as a near-term MPTC target.
-
-Magnetar will be re-evaluated for v0.2-v0.4 submission consideration
-based on community / NIST direction.
-
-## Honest framing for users
-
-> Magnetar is the **research-track** member of the Hanzo PQ
-> Threshold Suite. It is intended for paranoid scenarios where
-> ML-DSA's lattice security assumption is broken in the future and
-> a hash-based fallback is needed. It is NOT recommended for
-> production use today. Use **Pulsar (Tier 1)** for production
-> threshold post-quantum signing.
-
-## Contact
-
-For research collaboration on Magnetar:
-- Email: `magnetar@lux.network`
-- Public discussion:
-  <https://github.com/luxfi/pulsar/discussions> (label: `magnetar`)
-
----
-
-**Document metadata**
-
-- Name: `docs/magnetar.md`
-- Version: v0.1 (placeholder)
-- Date: 2026-05-18
-- Status: **Research direction, not specification.** No production
-  use. No NIST submission claim.
+Use the per-validator standalone path for production public-BFT
+signing. Use the TEE pool when you are willing to trust attested
+hardware. Treat THBS-SE as research.

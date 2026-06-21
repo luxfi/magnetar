@@ -265,10 +265,10 @@ func main() {
 				Round2:  r2s,
 			})
 			if err != nil {
-				fail(fmt.Errorf("Combine mode=%s msg=%d: %w", mode, msgIdx, err))
+				fail(fmt.Errorf("combine mode=%s msg=%d: %w", mode, msgIdx, err))
 			}
 			if len(evidences) != 0 {
-				fail(fmt.Errorf("Combine emitted evidences on honest KAT mode=%s msg=%d: %+v",
+				fail(fmt.Errorf("combine emitted evidences on honest KAT mode=%s msg=%d: %+v",
 					mode, msgIdx, evidences))
 			}
 

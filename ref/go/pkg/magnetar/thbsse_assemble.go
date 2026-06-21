@@ -3,60 +3,54 @@
 
 package magnetar
 
-// thbsse_assemble.go — strict-atom-assembly Combine path for THBS-SE
-// at Magnetar v1.1.
+// thbsse_assemble.go — THBS-SE Combine emit path.
 //
 // =====================================================================
-//  WHAT THIS FILE GIVES YOU
+//  HONEST SUMMARY: THIS PATH RECONSTRUCTS THE FIPS 205 MASTER
 // =====================================================================
 //
-// A pure-Go assembleSignatureBytes that takes t verified share-share
-// envelopes (the per-party (mask, masked) reveals already commit-bound
-// in thbsse.go) plus the public ThbsSeKey + slot binding + message, and
-// emits FIPS 205 wire-form signature bytes BYTE-IDENTICAL to circl's
-// slhdsa.SignDeterministic on the SAME (sk_from_seed(S), msg, ctx)
-// tuple --- WITHOUT EVER COMPOSING S OR ITS DERIVED (skSeed, skPrf)
-// FRAGMENTS AS A NAMED FREE-STANDING VARIABLE.
+// assembleSignatureBytes takes t verified share envelopes (the
+// per-party (mask, masked) reveals commit-bound in thbsse.go) plus the
+// public ThbsSeKey + slot binding + message, and emits FIPS 205
+// wire-form signature bytes byte-identical to
+// circl/slhdsa.SignDeterministic on the reconstructed master.
 //
-// The path is the strict-atom refinement promised at
-// BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11. Compared to v1.0 (where the
-// public combiner materialised S in a `seed []byte` local for the
-// duration of one circl SignDeterministic call), v1.1:
+// To do so it RECONSTRUCTS THE FULL FIPS 205 MASTER at the public
+// combiner: it Lagrange-interpolates the share bytes into
+// `derivedExpandInput`, SHAKE-expands that into `derivedMaterial`
+// (= skSeed || skPrf || pkSeed), and drives a FIPS 205 §5--§8 walk that
+// reads positional slices of `derivedMaterial`. The whole private key
+// is present in the combiner's process memory for the duration of one
+// Sign call. This is the SAME seed reconstruction as the older path.
 //
-//   - Routes EVERY secret-material access through one of two opaque
-//     callbacks (atomPRF and atomPRFMsg).
-//   - The callbacks own the ONLY buffers that ever hold the
-//     Lagrange-interpolated bytes of the FIPS 205 master material.
-//     The buffers are named after the SHAKE absorb context they feed
-//     (e.g. prfAbsorb) and zeroized at the closure boundary.
-//   - The signing engine (slhdsa_internal.go) walks FIPS 205 §5 / §6 /
-//     §7 / §8 and assembles the signature ATOM-BY-ATOM (R, FORS sk
-//     leaves, FORS auth nodes, WOTS+ chain bases, XMSS auth nodes,
-//     hypertree XMSS layers) by INVOKING the callbacks. The engine
-//     itself is FIPS 205 plaintext: it never sees secret bytes outside
-//     the callbacks' transient scope.
+// The earlier framing of this file called itself a "strict-atom"
+// refinement that "never composes S as a named free-standing variable"
+// and implied that buys a no-leak property over a `seed []byte` local.
+// It does NOT. Not naming the buffer `seed` changes the spelling, not
+// the data: `derivedMaterial` holds skSeed||skPrf||pkSeed all the same.
+// There is no confidentiality property here to rely on. The
+// permissionless THBS-SE path is RESEARCH-GRADE, not no-leak; see
+// BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11 (OPEN) and ASSEMBLE-INVARIANT.md.
 //
-// =====================================================================
-//  THE STRICT-ATOM INVARIANT (load-bearing)
-// =====================================================================
+// What this path DOES give, and all it gives: the emitted signature is
+// a valid FIPS 205 signature (byte-identical to the standard
+// deterministic signer on the reconstructed master), so any unmodified
+// verifier accepts it. That is a correctness/interop property, pinned
+// by TestSlhdsaInternal_ByteEqualToCirclSign and
+// TestThbsSE_StrictAtom_Combine_ByteIdentityToCircl. It is NOT a
+// no-leak property.
 //
-// At every line of this file:
-//   - No variable of any kind binds the FIPS 205 master byte material
-//     under a name matching the forbidden vocabulary defined in
-//     ASSEMBLE-INVARIANT.md (the four sentinel patterns that the
-//     v1.1 audit grep checks).
-//   - The grep is run against the raw bytes of this file (comments
-//     included) and MUST return zero matches. See the test gate
-//     TestThbsSE_StrictAtom_NoTransientSeed for the enforcement.
-//   - No variable holds the full reconstructed master S. The closest
-//     analogue --- the buffer that feeds the FIPS 205 §11.2
-//     `SHAKE256(pkSeed || ADRS || X)` PRF --- is named `prfAbsorb`
-//     and lives inside the atom callbacks for the duration of one
-//     SHAKE absorb call, then is zeroized.
+// The signing engine (slhdsa_internal.go) walks FIPS 205 §5/§6/§7/§8
+// and emits the signature by invoking two PRF/PRF_msg callbacks. The
+// callbacks read the secret segments of `derivedMaterial`. Scratch
+// buffers (prfAbsorb, prfMsgAbsorb) and the derived buffers are
+// zeroized after use — defense-in-depth against lingering copies, NOT
+// a guarantee the master was never resident.
 //
-// TestThbsSE_StrictAtom_NoTransientSeed (thbsse_assemble_test.go)
-// enforces the discipline by parsing this file's AST and asserting
-// every identifier name escapes the forbidden patterns.
+// TestThbsSE_AssembleIdentHygiene is a NAME LINT over this file (it
+// asserts no variable is *spelled* `seed`/`skSeed`/...). It is a style
+// check, not a security property: the master is reconstructed
+// regardless of naming.
 //
 // =====================================================================
 //  ALGEBRAIC LINEAGE

@@ -937,13 +937,14 @@ func Combine(input ThbsSeCombineInput) (*Signature, []ThbsSeShareEvidence, error
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].X < ordered[j].X })
 	pick := ordered[:threshold]
 
-	// Strict-atom assembly: emit FIPS 205 wire bytes directly from the
-	// validated quorum shares via the Magnetar-internal §5-8 path
-	// (slhdsa_internal.go + thbsse_assemble.go). The public combiner
-	// runs entirely inside the strict-atom discipline; no variable in
-	// the call graph below this point binds the FIPS 205 master byte
-	// material under the names SK.seed, SK.prf, sk_seed, or sk_prf.
-	// See ASSEMBLE-INVARIANT.md and TestThbsSE_StrictAtom_NoTransientSeed.
+	// Emit FIPS 205 wire bytes from the validated quorum shares via
+	// the Magnetar-internal sec 5-8 path (slhdsa_internal.go +
+	// thbsse_assemble.go). NOTE: assembleSignatureBytes RECONSTRUCTS
+	// THE FIPS 205 MASTER at this public combiner (into
+	// `derivedMaterial`). The permissionless THBS-SE path is
+	// research-grade, not no-leak -- the master is resident in this
+	// process for one Sign call. See ASSEMBLE-INVARIANT.md and
+	// BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11 (OPEN).
 	ctx := ctxFromSlot(input.Binding)
 	if len(ctx) > 255 {
 		return nil, evidences, ErrCtxTooLong

@@ -1,36 +1,20 @@
-# Magnetar v1.1 Lean bridge
+# Magnetar Lean bridge (HONEST: empty)
 
-The Lean bridge carries the algebraic invariants that the EasyCrypt
-theories cross-cite. Two top-level claims live here:
+This directory contains **no mechanized Lean proof** for Magnetar.
 
-1. `byte_wise_shamir_lagrange_at_zero_identity` --- byte-wise Shamir
-   + Lagrange-at-zero over GF(257) is the left inverse of polynomial
-   evaluation at distinct non-zero points. Shared with
-   `Crypto.Pulsar.Shamir`.
+`Crypto/Magnetar/StrictAtom.lean` is a 0-content scaffold. Its prior
+`strict_atom_byte_equality` theorem had a `sorry` body, and its
+`strictAtomDisciplineSatisfied : Prop := True` proved nothing about
+the code; both were removed.
 
-2. `shake256_functional` --- the FIPS 202 SHAKE-256 functional spec
-   (same input + output length yields the same byte stream). Shared
-   with `Crypto.Lux.SHA3`.
+The file now declares no `theorem`, no `axiom`, no `def`, and no
+`sorry`. It exists only to record, in the proof tree, that THBS-SE
+strict-atom byte-equality is NOT mechanized in Lean.
 
-## Files
+There is no Magnetar-specific Lean algebra here. If the GF(257)
+byte-wise Shamir / Lagrange-at-zero identity were needed as a
+discharged fact, it would have to be cited from a real
+`Crypto.Pulsar.Shamir` development; no such cross-citation is
+machine-checked for Magnetar today.
 
-| File | Role |
-|---|---|
-| `Crypto/Magnetar/StrictAtom.lean` | The strict-atom byte-equality theorem statement + the discipline statement (abstract-level no-op). |
-
-## Build
-
-The Lean bridge requires Lean 4 (>= v4.5.0). It is intended to be
-loaded as part of the broader `Crypto.Lux` Lean library; build
-configuration in this checkout is minimal (the bridge is text-only
-verification surface, not an executable). Cross-citations to
-`Crypto.Pulsar.Shamir` and `Crypto.Lux.SHA3` are RESOLVED in the
-sibling `~/work/lux/proofs/lean/Crypto/` checkout.
-
-## v1.0 -> v1.1 delta
-
-The v1.0 Lean bridge modeled the byte-wise Shamir layer shared with
-Pulsar. v1.1 adds the strict-atom byte-equality theorem with the
-abstract-model discipline statement. The shared Shamir layer is
-unchanged (the byte-wise GF(257) construction is algebraically
-identical between Magnetar and Pulsar).
+See `../README.md` and `../../PROOF-CLAIMS.md` for the honest state.
