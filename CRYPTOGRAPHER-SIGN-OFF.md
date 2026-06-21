@@ -1,121 +1,98 @@
-# Cryptographer sign-off --- luxfi/magnetar v1.0.0
+# Cryptographer sign-off --- luxfi/magnetar
 
-Independent review of the Magnetar SLH-DSA implementation at `main`
-of `github.com/luxfi/magnetar` at tag `v1.0.0`. Date of review:
-2026-05-31. Reviewer: cryptographer agent (internal review).
+Internal review of the Magnetar SLH-DSA implementation at `main` of
+`github.com/luxfi/magnetar`. Reviewer: cryptographer agent (internal).
 
 ## Summary
 
-**APPROVED WITH OPEN ITEMS** for production deployment of the
-per-validator standalone primitive and for the THBS-SE
-permissionless threshold construction under the threat model
-documented in `DEPLOYMENT-RUNBOOK.md` sec 2.1. The v1.0.0 review
-covers:
+**APPROVED for the per-validator standalone primitive only.** The
+threshold paths are NOT blessed as no-leak.
 
-- **Per-validator standalone**
-  (`ref/go/pkg/magnetar/standalone.go`) --- the public-BFT primary
-  primitive. APPROVED for production. The construction is a thin
-  wrapper around `cloudflare/circl/sign/slhdsa` v1.6.3 FIPS 205
-  SignDeterministic; the wire-identity claim
-  (TestMagnetar_Wire_FIPS205Verifiable) passes across all 3 SHAKE
-  modes. The aggregate-cert verifier has explicit
-  unknown-validator + pubkey-mismatch handling and parallel-CPU
-  dispatch with observable provenance via
-  `LastValidatorBatchTier`.
+- **Per-validator standalone** (`standalone.go`): **APPROVED for
+  production.** A thin, sound wrapper over
+  `cloudflare/circl/sign/slhdsa` FIPS 205 SignDeterministic. No shared
+  seed, no DKG, no reconstruction. Wire identity
+  (`TestMagnetar_Wire_FIPS205Verifiable`) passes across all 3 SHAKE
+  modes. The aggregate-cert verifier handles unknown-validator +
+  pubkey-mismatch and parallel-CPU dispatch with observable provenance.
 
-- **THBS-SE** (`ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go`)
-  --- the permissionless threshold companion. APPROVED for the
-  documented threat model (public combiner, anyone-can-combine,
-  no host in TCB at sign time). The 8 mandated test gates pass:
-  TestThbsSE_Wire_FIPS205Verifiable (3 modes),
-  TestThbsSE_RejectSeedReveal, TestThbsSE_RejectUnselectedFORS,
-  TestThbsSE_RejectUnselectedWOTS, TestThbsSE_SlotReuseRejected,
-  TestThbsSE_OverselectedCommittee,
-  TestThbsSE_SlotBindingDomainSeparation, and
-  BenchmarkThbsSE_Sign_5of7 (192f at < 100 ms/op on Apple M1 Max).
-  The KAT replay (TestKAT_ThbsSe) is deterministic at
-  (n=7, t=4) x 3 modes x 3 messages.
+- **TEE-attested combiner pool** (`luxfi/threshold/protocols/slhdsa-tee`):
+  **APPROVED under an explicit attested-hardware trust model.** The
+  seed is reconstructed inside a measured enclave on t hosts that must
+  agree. This is trust-relocation (adds a host to the TCB), NOT MPC.
+  The five `TestMagnetarCombine_*` gates build and pass under `-race`
+  after the `luxfi/zap` v0.3.1 bump in `luxfi/threshold`.
 
-## Honest open items (v1.1)
+- **Permissionless THBS-SE** (`thbsse.go`, `thbsse_assemble.go`): **NOT
+  APPROVED as a no-leak / no-host-in-TCB primitive.** The public
+  combiner RECONSTRUCTS the full FIPS 205 master every signature
+  (`ASSEMBLE-INVARIANT.md`). It is RESEARCH-GRADE. It may be used where
+  the combiner host is trusted by deployment policy, but it must not be
+  presented as keeping the seed secret from the combiner. The byte
+  identity to single-party FIPS 205 is a correctness/interop property,
+  not a confidentiality one.
 
-1. **MAGNETAR-STRICT-ATOM-V11** --- The strictest formulation of
-   the THBS-SE invariant ("no party or combiner EVER reconstructs
-   SK.seed, even transiently in memory") requires a v1.1
-   strict-atom-assembly path. v1.0 ships a PUBLIC COMBINER that
-   holds the seed for the duration of one
-   `slhdsa.SignDeterministic` call and zeroizes. This is materially
-   stronger than a TEE-attested privileged-aggregator model (no host
-   in TCB) and materially weaker than the strict invariant (a
-   peer-local memory-disclosure adversary at the precise sub-second
-   combine moment could observe the seed). See
-   `BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`.
+## Open items (corrected)
 
-2. **MAGNETAR-PVSS-DKG-V11** --- v1.0 ships a deterministic-dealer
-   setup (`NewThbsSeKey`). Production deployments needing the
-   leaderless PVSS-DKG variant route through the sibling
-   `luxfi/threshold` DKG package; the share envelope is
-   wire-equivalent. See
-   `BLOCKERS.md::MAGNETAR-PVSS-DKG-V11`.
+1. **MAGNETAR-STRICT-ATOM --- OPEN (was falsely marked CLOSED).** The
+   "strict-atom" Combine does NOT eliminate seed reconstruction; it
+   renames the buffer. The earlier sign-off's claim that v1.0/v1.1 was
+   "materially stronger than a TEE-attested model (no host in TCB)" was
+   wrong: whoever runs the public combiner sees the seed, so there IS a
+   host in the TCB at sign time. Closing this needs full MPC over the
+   SHAKE hash tree (open research) or the TEE pool. See `BLOCKERS.md`.
 
-3. **MAGNETAR-PROOF-TRACK-V11** --- The legacy EasyCrypt
-   scaffolding modeling the abandoned v0.x seed-recombine path has
-   been removed. The v1.0 proof track ports to the THBS-SE
-   construction shape; full EC + Lean coverage lands at v1.1. See
-   `BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11`.
+2. **PVSS-DKG open-reveal leak --- FIXED.** The earlier DKG published
+   every party's constant term, making the master reconstructible by
+   any observer. The production path (`RunDKG`) now publishes no
+   reveals; `TestPVSS_DKG_ProductionTranscriptHidesMaster` gates it.
+   Honest residual limits: pk derivation still reconstructs the master
+   (inherent), and the production path does not robustly exclude
+   malicious dealers at DKG time. See `BLOCKERS.md` (P2).
 
-4. **MAGNETAR-DUDECT-V11** --- v1.0's CT story is "inherit CIRCL"
-   (`ct/README.md`). The v1.1 dudect harness lands alongside the
-   strict-atom-assembly path. See
-   `BLOCKERS.md::MAGNETAR-DUDECT-V11`.
+3. **Mechanized proofs --- NONE.** The earlier EC/Lean track was
+   vacuous (a headline theorem proved by `apply`-ing an axiom that
+   restated it; `X = X` lemmas; a CT lemma by `admit`; a PVSS secrecy
+   "theorem" with conclusion `true`). It has been deleted or reduced to
+   labeled scaffolds. There is no mechanized refinement, present or on
+   a credible near-term path. See `PROOF-CLAIMS.md` §2.
 
-5. **MAGNETAR-EXTERNAL-AUDIT-V11** --- The v0.x internal sign-off
-   applied to the v0.x construction surface, much of which has been
-   removed at v1.0. The v1.1 external audit should target the
-   THBS-SE construction shape, the strict-atom-assembly path, and
-   the leaderless PVSS-DKG setup. See
-   `BLOCKERS.md::MAGNETAR-EXTERNAL-AUDIT-V11`.
+4. **dudect / statistical CT --- OPEN.** Only local CT helpers + code
+   review. The "CT" AST test is a name lint, not a timing measurement
+   (and CT is moot for a path holding the master in plaintext).
 
-## What changed since v0.5.x
+5. **External audit --- OPEN.**
 
-The full v1.0 changeset is in `CHANGELOG.md::[1.0.0]`. The
-load-bearing deletions:
+## What changed since v0.x
 
-- `threshold.go`, `aggregate.go`, `combine.go`, `shamir.go`,
-  `dkg.go` and their tests --- the legacy seed-recombine threshold
-  path.
-- `pkg/thbs/` (entire subtree) --- the legacy true-HBS path
-  including the `dkg2/` PVSS skeleton.
-- `vectors/threshold-sign.json`, `vectors/dkg.json` --- legacy KATs.
-- `jasmin/threshold/`, `jasmin/lib/` --- legacy Jasmin model.
-- `proofs/easycrypt/` (entire tree) --- legacy EC theories.
-- `ct/dudect/` (entire tree) --- legacy dudect harness.
+The load-bearing v1.0 deletions (recorded for provenance): the v0.x
+seed-recombine threshold files `threshold.go`, `aggregate.go`,
+`combine.go`, `shamir.go`, `dkg.go` and their tests; `pkg/thbs/`; the
+legacy KATs; the legacy Jasmin model; the legacy EC tree; the legacy
+dudect harness. The current code lives in `thbsse.go`,
+`thbsse_field.go`, `thbsse_assemble.go`, `slhdsa_internal.go`,
+`standalone.go`, `pvss_dkg.go`, `key.go`.
 
-The load-bearing additions:
-
-- `ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go` --- the
-  THBS-SE construction.
-- `ref/go/pkg/magnetar/thbsse_test.go` --- the 8 mandated test
-  gates plus 2 bonus correctness checks.
-- `vectors/thbsse-sign.json` --- deterministic KAT vectors at
-  (n=7, t=4) x 3 modes x 3 messages.
+The THBS-SE gates are `TestThbsSE_Wire_FIPS205Verifiable`,
+`TestThbsSE_RejectSeedReveal`, `TestThbsSE_RejectOversizedShareWireSize`,
+`TestThbsSE_RejectTamperedShareCommitMismatch`,
+`TestThbsSE_SlotReuseRejected`, `TestThbsSE_OverselectedCommittee`,
+`TestThbsSE_SlotBindingDomainSeparation`. (The last two reject-tests
+were formerly mis-named ...UnselectedFORS / ...WOTS; THBS-SE shares the
+whole seed, so they test commit binding, not atom selection.)
 
 ## Verification commands
 
 ```bash
 cd ref/go && GOWORK=off go build ./...
 cd ref/go && GOWORK=off go vet ./...
+cd ref/go && export PATH="$(go env GOPATH)/bin:$PATH" && staticcheck ./...
 cd ref/go && GOWORK=off go test -count=1 -short -timeout 600s ./pkg/magnetar/...
-cd ref/go && GOWORK=off go test -count=1 -race -short -timeout 600s ./pkg/magnetar/...
-cd ref/go && GOWORK=off go test -bench=BenchmarkThbsSE_Sign_5of7 -benchtime=2x ./pkg/magnetar/...
 ```
-
-All clean as of v1.0.0 sign-off.
 
 ## Recommendation
 
-**TAG `v1.0.0`** for the per-validator standalone primitive and for
-THBS-SE under the documented threat model. Track the 5 open items
-above against the v1.1 milestone. Operator-controlled MPC custody
-(M-Chain bridge, A-Chain confidential compute) remains the domain of
-the sibling `luxfi/threshold` package's TEE-attested variants and is
-explicitly out of scope for this primitive.
+Ship the per-validator standalone primitive as the production default.
+Ship the TEE pool as opt-in for trusted-hardware custody, under the
+honest trust-relocation framing. Keep THBS-SE labeled RESEARCH-ONLY; do
+not present it as no-leak. Track the open items in `BLOCKERS.md`.

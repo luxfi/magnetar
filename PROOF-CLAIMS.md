@@ -1,311 +1,110 @@
-# PROOF-CLAIMS --- Magnetar (HONEST framing)
+# PROOF-CLAIMS --- Magnetar (HONEST: proven vs asserted vs open)
 
-> **v1.0 framing.** This document is a v0.x archival snapshot. The
-> v1.0 proof track ports to the THBS-SE construction shape and lands
-> at v1.1 (see `BLOCKERS.md::MAGNETAR-PROOF-TRACK-V11` and
-> `proofs/README.md`).
+This document states, per property, exactly what is PROVEN (mechanized),
+what is ASSERTED (tested / by-construction / inherited from a standard),
+and what is OPEN. Read it before reading the code.
 
-> **What this submission proves, and --- critically --- what it does NOT.**
-> Companion to `TRUSTED-COMPUTING-BASE.md` (TCB) and `SUBMISSION.md`
-> (cover sheet).
->
-> Read this before reading the Magnetar code. The framing matters as
-> much as the implementation.
+## §0 One-paragraph truth
 
-## §1 The narrow claim Magnetar makes at this submission
+Magnetar has **no mechanized proof of any threshold property**. The
+per-validator standalone primitive is a thin, sound wrapper over
+`cloudflare/circl/sign/slhdsa` FIPS 205. The permissionless THBS-SE
+threshold path reconstructs the FIPS 205 master at the public combiner
+(research-grade; not no-leak). The dealerless PVSS-DKG production path
+hides the master from transcript observers but still reconstructs it to
+derive the group public key. The EasyCrypt/Lean "proof track" was
+vacuous and has been deleted or reduced to labeled scaffolds. Evidence
+is empirical (tests + KAT determinism + FIPS 205 verifier dispatch),
+not machine-checked.
 
-The strongest precise statement supported by Magnetar v0.3.0:
+## §1 Per-property status
 
-> **Byte-equal threshold to single-party FIPS 205 SLH-DSA
-> (Class N1).** For any honest threshold-sign session over committee
-> `[n]` with reconstruction threshold `t`, any signing quorum `Q ⊆ [n]`
-> of size `t`, message `m`, context `ctx`, session-id `sid`, attempt
-> `kappa`, where each party holds a `KeyShare` from a successful
-> Magnetar DKG ceremony, the signature byte string `sigma` emitted by
-> Magnetar `Combine(...)` satisfies:
->
-> `sigma = slhdsa.SignDeterministic(slhdsa.Scheme(ID).DeriveKey(S), NewMessage(m), ctx)`
->
-> where `S` is the master SLH-DSA scheme seed computed at DKG Round 3
-> (which equals the Lagrange-reconstructed seed at Combine time).
-> Therefore `sigma` verifies under unmodified FIPS 205
-> `slhdsa.Verify(pk, NewMessage(m), sigma, ctx)` with `pk` = the
-> DKG-output group public key.
-
-**Formal-statement status**: this is stated in prose and code,
-validated by test (`TestN1_ByteEquality_*` across (3,2), (5,3), (7,4)
-configurations), validated by KAT determinism, and inherited from
-FIPS 205 SLH-DSA's NIST security analysis for the single-party
-layer. It is **NOT mechanized** in EasyCrypt, Lean, Jasmin, or any
-other proof assistant at this submission **for the threshold
-overlay layer**. See §3 below for the explicit non-claims list.
-
-## §2 What IS provided
-
-| Aspect | Status | Source |
+| Property | Status | Basis |
 |---|---|---|
-| Implementation of the FIPS 205 single-party layer | ✓ by dispatch to `cloudflare/circl/sign/slhdsa` (community-audited mainstream Go FIPS 205 implementation) | `keygen.go`, `sign.go`, `verify.go` |
-| Class N1 (threshold output byte-identical to centralized FIPS 205 SignDeterministic on reconstructed seed) | ✓ by test (no mechanized refinement) | `n1_byte_equality_test.go` — `TestN1_ByteEquality_ThresholdMatchesCentralized`, `TestN1_ByteEquality_DifferentQuorumsSameSignature` |
-| KAT determinism | ✓ by deterministic regeneration | `vectors/{keygen,sign,verify,threshold-sign,dkg}.json`; `ref/go/cmd/genkat` consumes fixed seeds + committed config |
-| Constant-time discipline on commit verification and pubkey equality | ✓ by code (local `ctEqualSlice` / `ctEqual32` helpers) | `transcript.go` (helpers), `combine.go` (Round-2 commit gate), `keygen.go` (PublicKey.Equal) |
-| Identifiable-abort evidence (DKG equivocation) | ✓ by test | `dkg.go` Round-3 emits `AbortEvidence{Kind: ComplaintEquivocation, Evidence: my_digest || accused_digest}` on digest mismatch |
-| Domain separation across protocol round transcripts | ✓ by code (single source of truth: `transcript.go`) | `tagDKGCommit`, `tagDKGTranscript`, `tagSignR1`, `tagSignMask`, `tagSeedShare` — all centralised constants |
-| Secret-buffer zeroization on every Combine return path | ✓ by code review | `combine.go` — explicit `zeroizeBytes`/`zeroizePrivateKey` at every error and success exit, no `defer` (locally-legible secret lifetime) |
+| Per-validator standalone emits valid single-party FIPS 205 signatures | ASSERTED (by dispatch + test) | `standalone.go` calls `circl/slhdsa`; `TestMagnetar_Wire_FIPS205Verifiable` across 3 SHAKE modes. Inherits FIPS 205 (NIST 2024) security analysis for the single-party layer. |
+| THBS-SE Combine output is byte-identical to `circl/slhdsa.SignDeterministic` on the reconstructed master (valid FIPS 205 signature) | ASSERTED (by test) | `TestSlhdsaInternal_ByteEqualToCirclSign`, `TestThbsSE_StrictAtom_Combine_ByteIdentityToCircl`. This is a CORRECTNESS/INTEROP property. NOT mechanized. |
+| THBS-SE Combine is no-leak (master not reconstructed) | **FALSE / OPEN** | The path DOES reconstruct the master at the public combiner (`ASSEMBLE-INVARIANT.md`). There is no no-leak property to prove. RESEARCH-ONLY. |
+| PVSS-DKG production transcript hides the master from observers | ASSERTED (by test) | `RunDKG` emits no constant-term reveals; `TestPVSS_DKG_ProductionTranscriptHidesMaster`. NOT mechanized (the secrecy reduction to byte-wise Shamir over GF(257) is a standard result but is not machine-checked here). |
+| PVSS-DKG: no party EVER holds the master | **FALSE** | `deriveDKGPublicKey` reconstructs M to compute `pk = SLH-DSA.PK(M)` (inherent; see `BLOCKERS.md`). True only on the TEE / dealer paths. |
+| PVSS-DKG robust against malicious dealers (production path) | **NOT DELIVERED** | Hash commitments aren't openable without revealing m_i; production defers malformed-share detection to sign-time commit binding. Robustness holds only on the open-reveal (test) path. |
+| Threshold overlay mechanized refinement (EasyCrypt / Lean / Jasmin) | **NONE** | The prior track was vacuous; deleted/scaffolded. See §2. |
+| Constant-time of the threshold overlay (statistical / dudect) | OPEN | Only local CT helpers + code review. No dudect harness. The "CT" AST test is a name lint, not a timing measurement. |
+| Post-quantum hardness of SLH-DSA | INHERITED | FIPS 205 (NIST 2024); collision/preimage resistance of SHAKE. Nothing Magnetar-specific. |
 
-## §3 What is NOT proved (HONEST)
+## §2 The deleted/scaffolded "proof track" (HONEST accounting)
 
-This section is the load-bearing honesty disclosure. Read it.
+The earlier submission advertised a mechanized EasyCrypt + Lean track
+with a small "admit budget". Every result in it was vacuous:
 
-### §3.1 NOT proved: mechanized refinement of the threshold overlay
+- `Magnetar_N1_StrictAtom.ec` --- headline theorem
+  `magnetar_n1_strict_atom_byte_equality` proved by `apply
+  combine_assemble_axiom`, where that axiom RESTATED THE THEOREM
+  verbatim. Circular. Plus `strict_atom_discipline_satisfied : bool =
+  true`. **Reduced to a 0-content scaffold.**
+- `proofs/lean/.../StrictAtom.lean` --- theorem body `sorry`;
+  `strictAtomDisciplineSatisfied : Prop := True`. **Reduced to a
+  0-content scaffold.**
+- `Magnetar_N5_PVSS_DKG.ec` --- "secrecy theorem" with conclusion
+  `... true` proved by `trivial`; wire-compat `X = X`; composition
+  `true`. Doubly false because it claimed secrecy for the open-reveal
+  code that PUBLISHES the secret. **Reduced to a 0-content scaffold.**
+- `Magnetar_N1_SHAKE_Expand.ec` --- only non-axiom lemma was
+  `shake_expand s = shake_expand s` from `s = s`. **DELETED.**
+- `Magnetar_N1_Atom_Refinement.ec` --- a single restate-as-axiom.
+  **DELETED.**
+- `Magnetar_N4_KeyDeriveStable.ec` --- `s = s' => f s = f s'` ("this
+  function is a function"). **DELETED.**
+- `lemmas/Magnetar_CT.ec` --- `strict_atom_combine_is_ct` discharged by
+  `admit`; comment admitted "abstract level vacuous". CT is also the
+  wrong property (the master is in plaintext in the buffer). **DELETED.**
+- `lemmas/SLHDSA_Functional.ec` --- legitimate black-box FIPS 205
+  functional axioms, but fed only the deleted files. **DELETED.**
 
-Magnetar ships **no EasyCrypt theories, no Lean theorems, no Jasmin
-sources** specific to the threshold overlay layer. Pulsar (the M-LWE
-sibling at `~/work/lux/pulsar/`) ships 13/13 EasyCrypt files
-compiling clean with 0/0 admits, 5/5 Lean ↔ EC bridges, and 3/3
-jasmin-ct blocking gates on the threshold layer. **Magnetar does
-NOT** ship this for the threshold overlay.
+The remaining `.ec`/`.lean` files declare no `axiom`, `admit`, `lemma`,
+`theorem`, or `sorry` — they are prose scaffolds recording that the
+properties are NOT proven. See `proofs/README.md`.
 
-**What IS available upstream (but NOT redistributed in this
-submission)**: libjade has SLH-DSA formal CT artifacts for the
-**single-party FIPS 205 layer**. Magnetar's `Verify` and the
-Combine-internal `SignDeterministic` call route through
-`cloudflare/circl/sign/slhdsa`, not libjade's extracted code, so
-Magnetar does not redistribute or re-verify libjade's artifacts.
-A future Tier A++ delivery could either (a) integrate libjade's
-verified single-party SLH-DSA, or (b) cross-cite libjade's CT
-analysis as supporting evidence for the single-party half of the
-trust chain. Neither is in scope for v0.3.0.
+## §3 What the trust base reduces to (no mechanization)
 
-**Why no mechanized refinement of the overlay**: writing EC theories
-for the threshold overlay (byte-wise Shamir VSS over GF(257),
-three-round DKG transcript binding, two-round commit-bind sign,
-cSHAKE256 mix to reconstructed seed) is a multi-month research
-project. Pulsar took ~13 EC iterations (v4-v13) to drive admit
-budget to 0/0 with extensive Lean-bridged algebraic identities.
-Magnetar's algebraic identities are essentially identical to
-Pulsar's (same byte-wise Shamir over GF(257), same Lagrange
-reconstruction). The closure path is cross-citation: many Magnetar
-EC theory shells can re-use Pulsar's Lean ↔ EC bridges for the
-Shamir / Lagrange identities, with Magnetar-specific theory shells
-covering only the SLH-DSA-specific mix and key derivation. See
-`AXIOM-INVENTORY.md` §2 for the closure plan.
+For correctness/interop:
 
-**What this means in practice**: a NIST reviewer should NOT expect
-to find a `Magnetar_N1.ec` file with a `magnetar_n1_byte_equality_extracted`
-lemma analogous to Pulsar's. The trust base for Magnetar's
-byte-equality correctness reduces to:
+- FIPS 205 SLH-DSA standard (NIST 2024).
+- `cloudflare/circl/sign/slhdsa` reference (community-audited).
+- Go reference review of the threshold overlay.
+- KAT determinism (`ref/go/cmd/genkat`).
+- `TestSlhdsaInternal_ByteEqualToCirclSign` /
+  `TestMagnetar_Wire_FIPS205Verifiable` /
+  `TestThbsSE_Wire_FIPS205Verifiable`.
 
-- The FIPS 205 SLH-DSA standard (NIST 2024).
-- The `cloudflare/circl/sign/slhdsa` Go reference implementation.
-- The Go reference implementation review of the threshold overlay.
-- The KAT determinism check (`ref/go/cmd/genkat`).
-- The `TestN1_ByteEquality_*` empirical byte-equality harness.
-- The constant-time review documented in this file's §3.4.
+For confidentiality: the ONLY sound posture is the per-validator
+standalone path (no reconstruction). The THBS-SE permissionless path is
+research-grade; the TEE pool relocates trust into attested hardware.
 
-### §3.2 NOT proved: post-quantum hardness of SLH-DSA
+## §4 What an auditor should do
 
-This submission says nothing about the post-quantum hardness of
-SLH-DSA itself. SLH-DSA's security rests on the collision and
-preimage resistance of the underlying hash (SHAKE for the Magnetar
-parameter sets), under the FIPS 205 (NIST 2024) analysis.
+1. Read this file and `BLOCKERS.md`.
+2. Read `ASSEMBLE-INVARIANT.md` (what THBS-SE Combine does).
+3. `cd ref/go && GOWORK=off go build ./...` (clean).
+4. `GOWORK=off go test -count=1 -short ./pkg/magnetar/` (green),
+   including `TestPVSS_DKG_ProductionTranscriptHidesMaster`.
+5. Regenerate KATs and diff (determinism):
+   `GOWORK=off go run ./ref/go/cmd/genkat -out=vectors/`,
+   `diff -qr vectors_backup/ vectors/`.
+6. Read the Go reference: `params.go`, `types.go`, `keygen.go`,
+   `sign.go`, `verify.go`, `thbsse.go`, `thbsse_field.go`,
+   `thbsse_assemble.go`, `slhdsa_internal.go`, `standalone.go`,
+   `pvss_dkg.go`, `key.go`, `zeroize.go`. (NOTE: the v0.x files
+   `shamir.go`, `dkg.go`, `threshold.go`, `combine.go` were DELETED;
+   any doc still referencing them is stale.)
+7. Cross-reference FIPS 205 (NIST 2024) §5--§11 and §10.
 
-**The defensible PQ-safety claim**:
-> Magnetar implements FIPS 205 SLH-DSA (NIST 2024 stateless
-> hash-based signature standard) on three parameter sets:
-> SHAKE-192s (NIST PQ Cat 3, recommended), SHAKE-192f (Cat 3 fast),
-> SHAKE-256s (Cat 5). The single-party security analysis is NIST's
-> per FIPS 205; the post-quantum hardness assumption is collision
-> and preimage resistance of SHAKE, with no lattice dependence.
+## §5 Open items (tracked)
 
-**NOT defensible**:
-> Magnetar is proved post-quantum secure beyond the FIPS 205
-> analysis.
-
-### §3.3 NOT proved: byte-equality with FIPS 204 ML-DSA or any R-LWE construction
-
-Magnetar signatures are NOT byte-equal to FIPS 204 ML-DSA
-signatures (that is Pulsar's claim) or to any R-LWE construction
-(Corona's domain). The three constructions use different hardness
-families:
-
-- Magnetar: hash-based (FIPS 205 SLH-DSA, SHAKE).
-- Pulsar: M-LWE (FIPS 204 ML-DSA).
-- Corona: R-LWE (Boschini et al. ePrint 2024/1113).
-
-Any reviewer expecting cross-construction byte-equality should look
-at the dedicated sibling for the desired hardness family.
-
-### §3.4 NOT proved: statistical constant-time validation (dudect)
-
-Magnetar's threshold-overlay code paths use constant-time helpers
-(`ctEqualSlice`, `ctEqual32`) for every commit verification and
-public-key equality check; secret-dependent branches are absent
-from `verify.go`, `sign.go`, and the Combine commit-verify gate.
-**However, no dudect-style statistical timing harness ships at
-v0.3.0.** A dudect harness is roadmap item v0.4+; at submission
-scaffolding time the constant-time evidence is:
-
-- Code review: secret-dependent branches identified and replaced
-  with constant-time helpers in `transcript.go`.
-- `cloudflare/circl`'s upstream constant-time claims for the
-  FIPS 205 single-party layer.
-- The single-party layer's eventual libjade CT formal artifacts
-  (available upstream, not redistributed here).
-
-Pulsar's dudect harness is wired but not yet at submission-grade
-sample count (10⁹). Magnetar's equivalent harness is roadmap.
-
-### §3.5 NOT proved: implementation-side covert-channel safety
-
-The constant-time review does NOT address:
-- Memory-access leakage (cache-timing side channels)
-- Power side-channels
-- EM side-channels
-- Fault attacks
-- Microarchitectural leakage (Spectre / Meltdown class)
-- Statistical timing under realistic deployment conditions
-
-Production deployments MUST follow the hardening checklist in
-`DEPLOYMENT-RUNBOOK.md` (mlock pinning, core-dump disable, ptrace
-disable, TEE attestation, dedicated host, etc.).
-
-### §3.6 NOT proved: protocol-level adversarial robustness beyond reveal-and-aggregate
-
-The byte-equality claim in §1 is **honest-quorum correctness +
-aggregator-trusted-during-Combine**. It says: "when all parties
-follow the protocol AND the aggregator process is trusted for the
-brief seed-reconstruction window, the output verifies under
-single-party FIPS 205." It does NOT prove:
-
-- **Unforgeability** under adaptive corruption of the threshold
-  protocol — inherited (with caveats) from the reveal-and-aggregate
-  trust model where the aggregator is TCB; no Magnetar-specific
-  mechanization.
-- **Identifiable abort** under network partition — synchronous
-  network assumptions hold; async abort is out of scope.
-- **Robust completion** under `f < t/2` Byzantine parties — the
-  honest-quorum claim does not address robust signing under
-  partial dishonesty.
-- **Network-observer envelope confidentiality in v0.1** — v0.1
-  envelopes are plaintext (KAT-deterministic). A passive observer
-  can collect shares; v0.4 closes this with ML-KEM-768 envelope
-  wrapping (matching Pulsar CR-8). See `BLOCKERS.md` BLK-4.
-- **Threshold secrecy without aggregator trust** — v0.1 is
-  reveal-and-aggregate. A v0.2 full-MPC construction (aggregator
-  never sees the seed) is on the research path, no committed target.
-
-### §3.7 NOT proved: external Lean theorems or EC bridges specific to Magnetar
-
-Magnetar has NO Lean-bridged algebraic axioms specific to its
-implementation. Pulsar has 5: `lagrange_inverse_eval`,
-`threshold_partial_response_identity`, `add_share_zeroR`,
-`reconstruct_linear`, `shamir_correct`. The Lagrange-aggregation
-identity over GF(257) that Magnetar uses in Combine is
-**algebraically identical** to Pulsar's GF(257) variant (same
-field, same Shamir secret-sharing scheme, same Lagrange basis
-evaluation at `x=0`). Closure plan: cross-citation to Pulsar's
-`proofs/lean-easycrypt-bridge.md` once Magnetar's EC theory shells
-land at v0.5.0; Magnetar-specific bridge entries needed only for
-the SLH-DSA-specific mix (cSHAKE256 with `MAGNETAR-SEED-SHARE-V1`
-tag) and the KeyFromSeed → SignDeterministic dispatch.
-
-## §4 Refinement chain (what's connected to what)
-
-```
-Go implementation (ref/go/pkg/magnetar/*.go)
-       implements (by code review + KAT + TestN1_ByteEquality_*)
-FIPS 205 SLH-DSA standard (single-party layer)
-  + Magnetar threshold overlay (SPEC.md §3 DKG, §4 threshold sign, §6 byte-equality)
-       conforms to (by inspection)
-SPEC.md §6 byte-equality claim (Class-N1-analog)
-  ← validated empirically by n1_byte_equality_test.go
-  ← validated empirically against cloudflare/circl FIPS 205 Verify
-```
-
-Each "implements" / "conforms" relation is by **inspection and
-test**, NOT machine-checked for the threshold overlay. Compare to
-Pulsar's refinement chain (machine-checked at every step via
-EasyCrypt 13/13 + Lean bridges 5/5 + Jasmin-CT 3/3 against
-FIPS 204).
-
-The single-party FIPS 205 layer IS NIST-anchored (FIPS 205 2024),
-which is the standard's analysis; Magnetar inherits it via the
-`cloudflare/circl/sign/slhdsa` dispatch in `keygen.go`, `sign.go`,
-`verify.go`, and the Combine-internal `slhSign` call.
-
-## §5 What an auditor verifying this submission should do
-
-1. **Read** the `SUBMISSION.md` cover sheet for context.
-2. **Read** this document (`PROOF-CLAIMS.md`) for what's proved vs not.
-3. **Read** `TRUSTED-COMPUTING-BASE.md` for the implementation TCB.
-4. **Read** `FIPS-TRACEABILITY.md` for the FIPS 205 § → code map.
-5. **Read** FIPS 205 (NIST 2024) §10 for the underlying single-party
-   construction analysis (NIST standard).
-6. **Read** `SPEC.md` §3 (DKG), §4 (threshold sign), §6 (byte-equality
-   claim), §7 (trust model).
-7. **Run** `GOWORK=off go test -count=1 -short -timeout 240s
-   ./ref/go/pkg/magnetar/` — expect all tests green, including
-   `TestN1_ByteEquality_ThresholdMatchesCentralized` and
-   `TestN1_ByteEquality_DifferentQuorumsSameSignature`.
-8. **Run** the KAT regeneration determinism check: backup `vectors/`,
-   run `GOWORK=off go run ./ref/go/cmd/genkat -out=vectors/`, then
-   `diff -qr vectors_backup/ vectors/` — expect zero differences.
-9. **Read** the Go reference implementation: `keygen.go`, `sign.go`,
-   `verify.go`, `shamir.go`, `transcript.go`, `dkg.go`,
-   `threshold.go`, `combine.go`, `zeroize.go`.
-
-## §6 The honest one-paragraph version
-
-> Magnetar's submission package establishes that the Go reference
-> implementation faithfully implements the FIPS 205 SLH-DSA
-> single-party standard via the `cloudflare/circl/sign/slhdsa` Go
-> reference, and adds a novel threshold lifecycle (byte-wise Shamir
-> VSS over GF(257) of the SLH-DSA scheme seed, three-round DKG with
-> transcript-digest equivocation detection, two-round commit-bind
-> threshold sign with masked-share reveal, identifiable-abort
-> evidence pipeline, KAT-deterministic Magnetar-SHA3 hash suite via
-> cSHAKE256 / KMAC256 per FIPS 202 + SP 800-185). Magnetar's headline
-> claim is byte-identity to single-party FIPS 205 SLH-DSA
-> `slhdsa.SignDeterministic` on the reconstructed master seed —
-> empirically validated by `TestN1_ByteEquality_*` across three
-> committee/threshold configurations. Unlike the Pulsar sibling
-> submission (which ships a mechanized EasyCrypt + Lean + Jasmin
-> refinement chain against FIPS 204), Magnetar ships NO machine-checked
-> refinement at this submission **for the threshold overlay layer** —
-> the SLH-DSA single-party layer is FIPS-anchored (NIST 2024) but
-> mechanizing the threshold overlay itself is a multi-month research
-> roadmap item. Magnetar's correctness evidence reduces to: code
-> review of the Go reference against the FIPS 205 standard + the
-> Magnetar SPEC.md, the KAT determinism check, the
-> `TestN1_ByteEquality_*` empirical byte-equality harness against
-> single-party FIPS 205, and the constant-time review documented in
-> §3.4. The proof tier is intentionally less mature than Pulsar's
-> for the threshold overlay; the roadmap items in `NIST-SUBMISSION.md`
-> §"Roadmap" lay out the multi-version path to mechanized refinement.
-
-## §7 Roadmap (multi-version closure path)
-
-| Milestone | Target version |
+| Item | Status |
 |---|---|
-| ML-KEM-768 envelope wrapping of DKG Round-1 envelopes (closes passive-network-observer channel) | v0.4.0 |
-| Reshare protocol (Refresh + ReshareToNewSet) — Class N4-analog evidence | v0.4.0 |
-| EasyCrypt theory shells for the threshold overlay (refinement to FIPS 205) | v0.5.0 (research; multi-month) |
-| Lean ↔ EC bridge (cross-citation to Pulsar's Shamir / Lagrange bridges; or Magnetar-specific entries if needed) | v0.5.0 |
-| dudect-style statistical CT validation harness for the threshold overlay | v0.6.0 |
-| External cryptographic audit (engaged lab) | v0.6.0 |
-| Cross-implementation FIPS 205 verifier harness (BoringSSL / pq-crystals when SLH-DSA matures) | when third-party FIPS 205 implementations ship |
-| v0.2 full-MPC construction (aggregator never sees the master seed) | research, no committed target |
-
-The closure path is real but long. The honest framing at this
-submission: production-hardened implementation of a FIPS-anchored
-single-party primitive with a novel reveal-and-aggregate threshold
-overlay, NOT machine-checked refinement of the threshold overlay
-against FIPS 205.
-
----
-
-**Document metadata**
-
-- Name: `PROOF-CLAIMS.md`
-- Version: v0.1 (initial Tier A submission-package scaffolding)
-- Date: 2026-05-18
+| Mechanized refinement of the threshold overlay | OPEN (multi-week; prior track was vacuous, now deleted) |
+| No-leak THBS-SE (full MPC over SHAKE) | OPEN RESEARCH |
+| Robust dealerless DKG (group-homomorphic or PVSS+NIZK commitments) | OPEN (separate construction) |
+| dudect statistical CT harness | OPEN |
+| External cryptographer audit | OPEN |
+| Cross-implementation FIPS 205 byte-equality (non-circl) | OPEN |

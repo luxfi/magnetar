@@ -21,11 +21,14 @@ import (
 //     cloudflare/circl/sign/slhdsa.Verify across SHAKE-192s/192f/256s.
 //   - TestThbsSE_RejectSeedReveal: a malicious party attempting to
 //     publish SK.seed as a "share" gets rejected at verify time.
-//   - TestThbsSE_RejectUnselectedFORS: any reveal outside the
-//     message-selected atom set is rejected by Combine's input
-//     validation (the v0.6 reveal is a single per-party masked-share
-//     pair; "unselected reveal" maps to "tampered partial_sig that
-//     does not re-derive the committed Round-1 hash").
+//   - TestThbsSE_RejectOversizedShareWireSize: a Round-2 partial_sig
+//     of the wrong wire size is rejected with a wire-size evidence.
+//     (THBS-SE shares the whole seed; this is a wire-size / commit
+//     check, NOT a FORS-leaf-selection check.)
+//   - TestThbsSE_RejectTamperedShareCommitMismatch: a bit-flipped
+//     masked share fails commit re-derivation and is dropped with a
+//     commit-mismatch evidence. (A commit-binding check, NOT a WOTS+
+//     chain-base-selection check.)
 //   - TestThbsSE_SlotReuseRejected: signing two distinct messages
 //     under the same slot is rejected with detectable evidence.
 //   - TestThbsSE_OverselectedCommittee_SurvivesWithholding: n=7, t=3
@@ -255,21 +258,18 @@ func TestThbsSE_RejectSeedReveal(t *testing.T) {
 	}
 }
 
-// TestThbsSE_RejectUnselectedFORS pins the invariant "a share is
-// honored only when its commit re-derives correctly". In the v0.6
-// reveal model, a Round-2 PartialSig is honored iff
-// deriveThbsSeCommit(partial_sig, binding, msg, party) ==
-// observed_commit. Any tampering with the partial_sig — including
-// the conceptual "reveal an unselected FORS leaf" attack — is
-// rejected by this check.
+// TestThbsSE_RejectOversizedShareWireSize pins the invariant "a
+// Round-2 PartialSig of the wrong wire size is rejected and produces a
+// wire-size evidence". (THBS-SE shares the whole SLH-DSA seed; there
+// are no per-FORS / per-WOTS atom reveals to "select", so this is a
+// share WIRE-SIZE / commit-binding check, not a FORS-leaf-selection
+// check — the earlier name was misleading.)
 //
-// For v0.6 the per-byte share IS the entire seed-share leaf, not a
-// per-atom (FORS, WOTS) leaf — the strict per-atom share format
-// lands in v0.7 (BLOCKERS.md::MAGNETAR-THBSSE-STRICT-V07). We
-// therefore exercise the analogue: a Round-2 reveal whose partial_sig
-// includes a forged "atom" payload (in the v0.6 wire shape, just
-// extra trailing bytes) is rejected on wire-size grounds.
-func TestThbsSE_RejectUnselectedFORS(t *testing.T) {
+// The share is honored only when its commit re-derives correctly. Here
+// a Round-2 reveal carries extra trailing bytes; it fails the
+// wire-size check and the offending party is dropped with a
+// ThbsSeShareWireSize evidence.
+func TestThbsSE_RejectOversizedShareWireSize(t *testing.T) {
 	params := MustParamsFor(ModeM192s)
 	committee := makeThbsSeCommittee(t, 5)
 	key, err := NewThbsSeKey(params, 3, committee, nil)
@@ -308,28 +308,22 @@ func TestThbsSE_RejectUnselectedFORS(t *testing.T) {
 	}
 }
 
-// TestThbsSE_RejectUnselectedWOTS pins the invariant "a Round-2
-// reveal is honored only when its commit re-derives correctly under
-// the slot binding the share was originally committed to". In the
-// v1.0 wire shape, the per-party PartialSig carries (mask ||
-// masked_share). The conceptual "reveal an unselected WOTS+ chain
-// base" attack collapses to: a Round-2 reveal whose masked-share
-// portion has been flipped so that the recovered share decodes to
-// the WRONG GF(257) lane --- i.e. a forged share that points to a
-// different polynomial slot than the one the party committed to in
-// Round 1.
+// TestThbsSE_RejectTamperedShareCommitMismatch pins the invariant "a
+// Round-2 reveal is honored only when its commit re-derives correctly
+// under the slot binding the share was committed to". (Again: THBS-SE
+// shares the whole seed; there is no WOTS+ chain base to "select", so
+// this is a COMMIT-BINDING check on a tampered masked share, not a
+// WOTS-selection check.)
 //
-// We construct the attack as a bit-flip in the masked_share portion
-// of party 1's reveal. The Round-1 commit was bound to the honest
-// (mask || masked_share); the tampered reveal carries
-// (mask || masked_share XOR delta). The combiner's commit
-// re-derivation produces a different digest, the reveal is dropped,
-// and a ThbsSeShareCommitMismatch evidence is emitted for that
-// party. With n=5, t=3 and only one tampered share, the remaining
-// honest pair is below threshold, so Combine returns
-// ErrInsufficientQuor --- the canonical "drop, slash, retry"
-// signal the consensus layer expects.
-func TestThbsSE_RejectUnselectedWOTS(t *testing.T) {
+// We bit-flip the masked_share portion of party 1's reveal. The
+// Round-1 commit was bound to the honest (mask || masked_share); the
+// tampered reveal carries (mask || masked_share XOR delta). The
+// combiner's commit re-derivation produces a different digest, the
+// reveal is dropped, and a ThbsSeShareCommitMismatch evidence is
+// emitted. With n=5, t=3 and one tampered share, the remaining honest
+// pair is below threshold, so Combine returns ErrInsufficientQuor ---
+// the canonical "drop, slash, retry" signal.
+func TestThbsSE_RejectTamperedShareCommitMismatch(t *testing.T) {
 	params := MustParamsFor(ModeM192s)
 	committee := makeThbsSeCommittee(t, 5)
 	key, err := NewThbsSeKey(params, 3, committee, nil)

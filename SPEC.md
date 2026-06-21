@@ -15,6 +15,36 @@ Companion documents:
 Magnetar v1.0 ships TWO primitives. Both produce FIPS 205 wire bytes
 that an unmodified verifier accepts.
 
+### 1.0 Threshold SLH-DSA status (normative)
+
+Magnetar does NOT claim an efficient oracle-respecting thresholdization of
+SLH-DSA. Known theoretical barriers for extractable hash-based signatures
+(Kondi-Kumar-Vanegas, MPTS '26) imply that, in the no-dealer / no-preprocessing
+setting a public, leaderless, permissionless chain requires, threshold signing
+CANNOT be achieved by merely making black-box use of the random-oracle / hash
+function. A true threshold SLH-DSA signer would have to evaluate the FIPS 205
+signing algorithm inside an active-secure MPC -- including the SHAKE/SHA-2/Keccak
+computations that derive `R`, the FORS secrets, the WOTS+ chains, and the
+authentication paths -- which is non-black-box use of the hash: research-grade
+and expected to be expensive (the **T-SLH-DSA-MPC** research track).
+
+Production Magnetar therefore implements threshold **CERTIFICATION** over
+**INDEPENDENT** FIPS 205 SLH-DSA signatures -- never threshold signing:
+
+- **Permissionless (production default):** the weighted quorum certificate in
+  `luxfi/consensus` (`protocol/quasar/quorum_cert.go`). A quorum-weight subset
+  of the validator set sign independently (1.1 below); a verifier checks the
+  quorum predicate directly, or via a post-quantum STARK/FRI proof of those
+  verifications (P3Q, `luxfi/p3q`). No key material is shared, reconstructed,
+  or combined.
+- **Trusted-hardware / custody (opt-in production):** the TEE-attested combiner
+  pool -- honest trust-relocation (a host enters the TCB), NOT MPC. See
+  `BLOCKERS.md`.
+- **THBS-SE (1.2): RESEARCH-ONLY.** It reconstructs the FIPS 205 master at the
+  public combiner every signature; it MUST NOT be presented as a
+  no-reconstruction production threshold. See
+  `BLOCKERS.md::MAGNETAR-STRICT-ATOM` (OPEN).
+
 ### 1.1 Per-validator standalone (public-BFT primary)
 
 API at `ref/go/pkg/magnetar/standalone.go`:
@@ -46,8 +76,11 @@ Trust model:
 
 - No DKG, no shared seed, no aggregator-in-TCB.
 - Per-validator slashing is attributable.
-- Z-Chain Groth16 rollup compresses `N x |sigma|` to ~192 bytes; the
-  rollup is a separate primitive (lux-zchain spec).
+- A post-quantum P3Q STARK/FRI proof (`luxfi/p3q`) compresses the N
+  independent signatures plus the weighted-quorum predicate into one
+  succinct quorum certificate; the rollup is a separate primitive
+  (`luxfi/consensus` quorum_cert + `luxfi/p3q`). The earlier Groth16/bn254
+  rollup is classical (pairing-based) and is superseded for PQ finality.
 
 ### 1.2 THBS-SE (permissionless threshold)
 

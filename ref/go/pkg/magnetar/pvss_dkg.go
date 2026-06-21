@@ -3,47 +3,50 @@
 
 package magnetar
 
-// pvss_dkg.go --- Dealerless PVSS-DKG for the THBS-SE setup.
-//
-// Closes BLOCKERS.md::MAGNETAR-PVSS-DKG-V11.
+// pvss_dkg.go --- PVSS-DKG for the THBS-SE setup.
 //
 // =====================================================================
-//  WHAT THIS FILE GIVES YOU
+//  HONEST SUMMARY: TWO PATHS, ONE HARD BARRIER
 // =====================================================================
 //
-// A pure-Go runDKG that takes a sorted committee, the FIPS 205 mode,
-// the (n, t) threshold pair, and a slice of per-party rng readers, and
-// emits a wire-compatible *ThbsSeKey whose Shares field is byte-shaped
-// identically to what NewThbsSeKey produces, but where:
+// This file provides a dealerless setup for THBS-SE share material.
+// There are TWO entry points, and they differ in exactly one property:
+// whether the transcript reveals the master.
 //
-//   - NO PARTY HOLDS THE MASTER. The master byte vector M[b] is the
-//     mod-257 sum of n per-party contributions m_i[b]. Honest parties
-//     keep their m_i memory-local; corrupted parties release m_i to
-//     the adversary; the master itself is never assembled in any
-//     party's heap, ever.
+//   - RunDKG (PRODUCTION): the transcript carries NO constant-term
+//     reveals (Reveals == nil; tr.RevealsMaster() == false). An
+//     observer of the transcript CANNOT reconstruct M = sum_i m_i from
+//     polynomial reveals. This is the no-leak setup path.
 //
-//   - NO TRUSTED DEALER. There is no privileged setup machine. The
-//     protocol runs symmetrically across all n parties.
+//   - RunDKGSimulationOpenRevealTestOnly (TEST/KAT): every party
+//     publishes its full RevealMsg, so the transcript REVEALS the
+//     master. It exists for deterministic KAT replay and for
+//     exercising the verification logic in tests. It requires an
+//     explicit hazard acknowledgement and MUST NOT run in production.
 //
-//   - PUBLICLY VERIFIABLE. Every party publishes a hash-based
-//     commitment to each polynomial coefficient at Round 1, and at
-//     Round 2 reveals blinding randomness alongside Reed-Solomon
-//     consistency tags any peer uses to verify a party's shares
-//     against the published commitments without learning the
-//     contribution.
+// THE HARD BARRIER (read before trusting the no-leak claim):
 //
-//   - WIRE-COMPATIBLE. The emitted *ThbsSeKey is byte-shape identical
-//     to the dealer-path output. Specifically:
-//       * key.Shares[i].EvalPoint  = committee_index + 1 (1-indexed,
-//         matching the dealer path's EvalPointFromCommitteeIndex).
-//       * key.Shares[i].Share      = bigEndianU16 lanes of party_i's
-//         aggregated Shamir share over GF(257), same wire as
-//         thbsseShareToBytes(thbsseShare{X, Y}).
-//       * key.SetupTranscript      = the same cSHAKE256(pk_bytes || n
-//         || t || committee[i]_serialized...) digest the dealer path
-//         emits, so any auditor's transcript hash matches.
-//     The wire equality is enforced by
-//     TestPVSS_DKG_ByteCompatWithDealerPath.
+//   Deriving the SLH-DSA group public key needs the master.
+//   pk = SLH-DSA.PK(M) is a hash tree over M; there is no way to
+//   compute it from shares without reconstructing M at some party (or
+//   full MPC over the SHAKE hash tree --- open research). So
+//   deriveDKGPublicKey RECONSTRUCTS M transiently to compute pk and
+//   zeroizes it. That reconstruction is the inherent cost of producing
+//   any SLH-DSA-shaped artifact from a shared seed. It is NOT
+//   published, but it does mean SOME party (whoever derives pk) holds M
+//   for an instant. "No party EVER holds M" is achievable only via the
+//   TEE path or the dealer path. Do not over-claim it.
+//
+// The earlier banner here claimed "NO PARTY HOLDS THE MASTER ... ever"
+// and described a "NO-MASTER-IN-MEMORY DISCIPLINE" whose only content
+// was naming a buffer `lagrangeScratch` instead of `seed`. That was
+// the same proof-by-rename used on the SIGN side: a variable name is
+// not a security property, and the pk-derivation reconstruction is
+// real. Both claims are corrected here and in BLOCKERS.md.
+//
+// Wire compatibility: the emitted *ThbsSeKey is byte-shape identical to
+// the dealer-path output (TestPVSS_DKG_ByteCompatWithDealerPath uses
+// the open-reveal path because it inspects the polynomial reveals).
 //
 // =====================================================================
 //  CONSTRUCTION
@@ -56,12 +59,13 @@ package magnetar
 // re-cast the same algebraic shape over GF(257) using a hash-based
 // commitment construction (no DDH; commitments are binding by
 // collision-resistance of cSHAKE256 and hiding by the secret blinding
-// randomness mixed into the cSHAKE256 absorb). The substitution is
-// faithful for the dealerless-setup property: each party's polynomial
-// commitments suffice to verify that the share envelope it distributes
-// at Round 1 is consistent with a polynomial of the correct degree,
-// and any complaint emitted at Round 2 carries identifiable evidence
-// against a malicious dealer.
+// randomness mixed into the cSHAKE256 absorb). IMPORTANT: hash
+// commitments are NOT homomorphic, so unlike Feldman/Schoenmakers a
+// recipient CANNOT verify its share against the commitments without the
+// dealer's opening — and the opening includes the constant term m_i.
+// This is why the production path defers share verification (see the
+// VERIFIABILITY and SECURITY sections below); the "publicly verifiable"
+// property holds in full only on the open-reveal (test) path.
 //
 // Round structure (n parties, t-of-n threshold, seed_size L = 96 or
 // 128 bytes):
@@ -84,127 +88,105 @@ package magnetar
 //       carrying the per-recipient blob).
 //
 //   Round 2 — every party j ∈ [1..n]:
-//     - For each i ∈ [1..n], receive σ_{i→j} from i alongside
-//       i's published commitments {C_{i,b,d}} and i's reveal payload
-//       (the blindings ρ_{i,b,d}). Reconstruct the polynomial value at
-//       x=j from i's reveal and check it byte-equals σ_{i→j}[b]. If
-//       not, j publishes a complaint blob carrying i's (σ, ρ)
-//       inconsistency — any third party verifies. Honest parties slash
-//       the malicious party out of the qualified set Q.
 //     - Aggregate: party j's final Shamir share is
 //       σ_j[b] = Σ_{i ∈ Q} σ_{i→j}[b] mod 257 for each b.
-//     - Master M is implicitly Σ_{i ∈ Q} m_i mod 257; nobody computes
-//       it. The aggregate share σ_j is the Lagrange evaluation at j of
-//       the implicit master polynomial F_b(x) = Σ_{i ∈ Q} f_{i,b}(x).
+//     - The aggregate share σ_j is the Lagrange evaluation at j of the
+//       implicit master polynomial F_b(x) = Σ_{i ∈ Q} f_{i,b}(x), whose
+//       constant term is M[b] = Σ_{i ∈ Q} m_i[b].
+//     - SHARE VERIFICATION: with hash commitments, a recipient CANNOT
+//       non-interactively check σ_{i→j} against {C_{i,b,d}} without i's
+//       opening, and the opening includes the constant term m_i. So the
+//       PRODUCTION path (RunDKG) does NOT verify shares at DKG time and
+//       does NOT publish reveals; malformed shares are caught at sign
+//       time (THBS-SE commit binding) and via a complaint that reveals
+//       only the disputed recipient's share value. The OPEN-REVEAL test
+//       path verifies fully against published reveals (and thereby
+//       reveals the master). See RunDKG's HONEST LIMITATIONS.
 //
-//   Round 3 — every party j ∈ [1..n]:
-//     - Each party publishes its index j and pk-derivation contribution
-//       PK_i = pk_of(KeyFromSeed(m_i)) only for AUDIT (one half of the
-//       protocol: we want a single PK after aggregation). The actual
-//       protocol pk is derived from a Lagrange reconstruction of the
-//       master:
-//         M[b] = Σ_{j ∈ R} λ_j · σ_j[b] mod 257
-//       where R is any t-subset of the qualified set. Per FIPS 205
-//       §10.1, KeyFromSeed(M) is deterministic. Any party (or any
-//       observer holding R, σ_j's, and the public eval points) computes
-//       PK without ever holding M outside the derivation closure.
+//   PK derivation (whoever calls VerifyDKGTranscript):
+//     - pk is derived from a Lagrange reconstruction of the master:
+//         M[b] = Σ_{j ∈ R} λ_j · σ_j[b] mod 257, R a t-subset of Q.
+//       Per FIPS 205 §10.1, KeyFromSeed(M) is deterministic. Computing
+//       pk REQUIRES reconstructing M (a hash tree over M); there is no
+//       way around it without TEE/MPC. The reconstruction is transient,
+//       internal, and not published — but it IS a reconstruction.
 //
 // =====================================================================
-//  THE NO-MASTER-IN-MEMORY DISCIPLINE
+//  ON "NO MASTER IN MEMORY" (the earlier claim, corrected)
 // =====================================================================
 //
-// During Rounds 1-3 of runDKG, NO party's process memory ever holds
-// the byte vector M. Each party's heap contains only:
+// The production transcript hides the master from OBSERVERS (no
+// reveals). It does NOT make it true that "no party ever holds M":
+// deriveDKGPublicKey reconstructs M to compute pk. The earlier banner's
+// "NO-MASTER-IN-MEMORY DISCIPLINE" rested on naming a buffer
+// `lagrangeScratch` instead of `seed` — a naming convention, not a
+// security property. The buffer name is incidental. What is real:
 //
-//   (a) Its own m_i ∈ GF(257)^L — known to that party alone.
-//   (b) The shares σ_{i→j} it sent + the shares it received from
-//       others.
-//   (c) The aggregated σ_j after Round 2.
+//   - RunDKG's transcript carries no constant-term reveals, so M is not
+//     reconstructible from the wire (this IS a real improvement over
+//     the old open-reveal-only design).
+//   - pk derivation reconstructs M transiently at one party and
+//     zeroizes it (inherent SLH-DSA cost; not eliminated by naming).
 //
-// The single point at which M could conceptually be assembled is in
-// the PK-derivation step, where the protocol output pk must match
-// KeyFromSeed(M). We use a special derivation closure that:
-//
-//   - Lagrange-reconstructs M into a scratch buffer
-//     `lagrangeScratch`.
-//   - Immediately feeds `lagrangeScratch` to KeyFromSeed (which
-//     consumes the buffer via slhdsa.DeriveKey and produces the
-//     bytes of the FIPS 205 public key).
-//   - Zeroizes `lagrangeScratch`.
-//   - Returns ONLY the public key bytes — never the master.
-//
-// This is the same "transient seed at the public combiner" pattern the
-// THBS-SE Combine path uses pre-strict-atom (i.e. v1.0); the dealerless
-// setup variant inherits the same discipline. The strict-atom Combine
-// path (thbsse_assemble.go) tightens this to never-name-master-as-
-// variable for the SIGN side of the protocol; the SETUP side
-// (this file) still reconstructs M transiently into one named buffer
-// at PK derivation, with the buffer zeroized at function exit. The
-// strict-atom discipline of the SIGN path is unaffected by this setup
-// step — the buffer here is named `lagrangeScratch` rather than any
-// of the v1.0 master-naming patterns (sk_seed, sk_prf, SK.seed, SK.prf).
-//
-// Production deployments that want to eliminate this last transient
-// reconstruction route the PK derivation through a TEE-attested
-// host (sibling primitive at luxfi/threshold/protocols/slhdsa-tee) or
-// through a multi-party SHAKE evaluation (open research, multi-second
-// per setup). Both are sibling primitives to magnetar and live in
-// their own slot.
+// To guarantee no party holds M even for pk derivation, use the TEE
+// path (sibling primitive at luxfi/threshold/protocols/slhdsa-tee) or
+// the dealer path (NewThbsSeKey, dealer-in-TCB-for-setup-only). A
+// multi-party SHAKE evaluation that derives pk without reconstructing M
+// is open research (multi-second per setup).
 //
 // =====================================================================
 //  VERIFIABILITY
 // =====================================================================
 //
-// Any third party with the published Round-1 commitments and the
-// Round-2 reveals verifies the setup transcript via:
-//
 //   VerifyDKGTranscript(transcript) -> (qualifiedSet, pk, error)
 //
-// which:
-//   - For each party i and each polynomial coefficient (b, d),
-//     recomputes C_{i,b,d} from i's revealed (ρ_{i,b,d}, coeff_value)
-//     and checks byte-equality with i's published commitment.
-//   - For each (i, j) pair, evaluates f_{i,b}(j) from i's revealed
-//     coefficients and checks byte-equality with σ_{i→j}[b].
-//   - Drops any party with a mismatch from Q.
-//   - If |Q| < t, returns an error (DKG failed; restart).
-//   - Otherwise, recomputes pk from Lagrange interpolation as above.
+// dispatches on transcript type:
+//
+//   - PRODUCTION transcript (no reveals): verifies commitment shape +
+//     setup binding + received-share shape, qualifies every well-shaped
+//     party (it CANNOT verify shares against hash commitments without
+//     the reveals), and derives pk. Malformed-share detection is
+//     deferred to sign-time commit binding + the complaint flow.
+//
+//   - OPEN-REVEAL transcript (TEST/KAT): additionally re-derives every
+//     commitment from the published reveals and checks every received
+//     share against the revealed polynomial, dropping inconsistent
+//     parties. This path reveals the master.
 //
 // =====================================================================
-//  SECURITY ARGUMENT (informal)
+//  SECURITY ARGUMENT (informal) --- and its limits
 // =====================================================================
 //
 // Adversary controls T = {i : party_i is corrupt} with |T| ≤ t-1.
 //
-//   - Secrecy: The adversary's view of an honest party h ∈ [1..n] \ T
-//     consists of the (t-1) shares σ_{h→i} for i ∈ T. These are
-//     uniform Shamir leaves of f_{h,b}, giving zero information about
-//     m_h = f_{h,b}(0) by Shamir info-theoretic security over GF(257).
-//     Therefore the adversary's view of the master M = Σ_i m_i is
-//     uniform on GF(257)^L conditioned on the T-contributions, which
-//     the adversary chose. Since at least one honest party exists in
-//     [1..n] \ T (|T| ≤ t-1 < n), the master is uniformly distributed
-//     in the adversary's view.
+//   - Secrecy (PRODUCTION path only): if no honest party publishes its
+//     constant term (RunDKG: nobody publishes reveals), the adversary's
+//     view of an honest party h consists of the ≤(t-1) shares σ_{h→i}
+//     for i ∈ T. These are uniform Shamir leaves of f_{h,b}, giving
+//     zero information about m_h = f_{h,b}(0) by Shamir info-theoretic
+//     security over GF(257). Hence M = Σ_i m_i is uniform in the
+//     adversary's view. THIS ARGUMENT FAILS for the open-reveal path,
+//     where every m_i is published and M is trivially reconstructible.
+//     (It is also NOT mechanized; see PROOF-CLAIMS.md.)
 //
-//   - Correctness: Each party's polynomial f_{i,b} has constant term
-//     m_i[b]. Aggregating across i ∈ Q, F_b(x) = Σ_{i ∈ Q} f_{i,b}(x)
-//     has constant term Σ_{i ∈ Q} m_i[b] = M[b]. Therefore the
+//   - Correctness: Each f_{i,b} has constant term m_i[b]. Aggregating,
+//     F_b(x) = Σ_{i ∈ Q} f_{i,b}(x) has constant term M[b], so the
 //     aggregate shares σ_j = F_b(j) Lagrange-interpolate to M at x=0.
 //
-//   - Robustness against malicious commitments: a malicious party
-//     publishing a commitment that does not open to a degree-(t-1)
-//     polynomial is detected at Round 2 by any honest verifier. The
-//     malicious party is excluded from Q; the protocol proceeds with
-//     the remaining honest contributions. As long as |Q| ≥ t, the
-//     final shares Lagrange-interpolate to a valid master.
+//   - Robustness against malicious dealers: DELIVERED ONLY on the
+//     open-reveal path (which detects a non-opening commitment at
+//     verify time). The PRODUCTION path does NOT deliver it: hash
+//     commitments are not openable without revealing m_i, so a
+//     malicious dealer's bad share is caught only later, at THBS-SE
+//     sign time (commit binding) or via a complaint. For adversarial
+//     committees, prefer the dealer path or the TEE pool. This limit is
+//     stated in RunDKG's HONEST LIMITATIONS, not hidden.
 //
-//   - Equivalence to dealer: at protocol termination, the aggregate
-//     shares σ_j byte-equal the dealer-path shares that would have
-//     been produced by a (hypothetical) dealer who sampled M = Σ m_i
-//     and ran thbsseDealRandomGF on M with coefficients Σ c_{i,b,d}.
-//     The two paths are operationally indistinguishable to anyone
-//     holding (PK, [σ_j], setup_tr) — only the WHO-HOLDS-M property
-//     differs.
+//   - Equivalence to dealer: the aggregate shares σ_j byte-equal the
+//     dealer-path shares for the same implicit master + coefficient
+//     distribution (TestPVSS_DKG_ByteCompatWithDealerPath, open-reveal
+//     path). The two paths are wire-indistinguishable; they differ in
+//     who holds M and in robustness.
 //
 // =====================================================================
 //  CITATIONS
@@ -653,30 +635,32 @@ func (st *PVSSPartyState) ShareTo(j uint32) ([]uint16, error) {
 	return out, nil
 }
 
-// RevealMsg extracts the party's Round-2 reveal broadcast. After
-// publishing this, any third party can verify the party's distributed
-// shares against the Round-1 commits.
+// RevealMsg extracts a party's FULL Round-2 reveal: every polynomial
+// coefficient INCLUDING the constant term m_i[b], plus the blindings.
 //
-// Note that publishing the polynomial coefficients (including the
-// constant term m_i[b]) at Round 2 DOES reveal the party's
-// contribution to the master. This is the standard DKG pattern:
-// secrecy of the master M = Σ m_i depends on at least one honest
-// party REFUSING to reveal its m_i. The Round-2 reveal is only
-// invoked on parties suspected of misbehavior (i.e. parties who
-// distributed shares inconsistent with their commits). In an honest
-// run, NO Round-2 reveal is needed for the protocol to terminate —
-// the shares + commits suffice for verification via the byte-equality
-// check at recipient j: f_{i,b}(j) computed by recipient against the
-// commit C_{i,b,0} on j's row in i's recipientCommit grid.
+// !!! THIS LEAKS THE CONTRIBUTION. !!!
 //
-// However, our reference DKG runs the FULL reveal at Round 2 for
-// simplicity: every party publishes their coefficients + blindings,
-// every other party verifies. In production deployments where
-// secrecy of m_i must be preserved post-DKG, the Round-2 reveal
-// becomes conditional (issued only against a published complaint).
-// The reference variant in this file is the "open-reveal" mode; the
-// production deployment can switch to "complaint-conditional reveal"
-// without changing the wire shape of the share envelope.
+// PolyCoeffs[b][0] == m_i[b] is the party's contribution to the
+// master M = sum_i m_i. If every party publishes its RevealMsg (the
+// "open-reveal" mode), then M is reconstructible by ANY observer of
+// the transcript, not merely by t-1 colluding insiders. A transcript
+// that contains every party's RevealMsg has NO master secrecy.
+//
+// Therefore this method is for the TEST / KAT / complaint paths only:
+//
+//   - The open-reveal simulation `RunDKGSimulationOpenRevealTestOnly`
+//     (test/KAT reproducibility; produces a master-revealing
+//     transcript) calls it for every party.
+//   - The complaint flow may call it for a SINGLE accused party whose
+//     misbehavior has been recorded (`ComplaintReveal`). Even there,
+//     publishing the constant term sacrifices that party's
+//     contribution secrecy; a sound production complaint flow reveals
+//     only the disputed recipient's share value, not the whole
+//     polynomial (see the honest-limitations note on RunDKG).
+//
+// The PRODUCTION path (`RunDKG`) does NOT call this on the honest run:
+// its transcript carries Reveals == nil so M is never reconstructible
+// from it.
 func (st *PVSSPartyState) RevealMsg() PVSSRevealMsg {
 	out := PVSSRevealMsg{
 		NodeID:     st.NodeID,
@@ -788,44 +772,55 @@ func VerifyShareConsistency(
 	return failed, nil
 }
 
-// RunDKGSimulation runs an n-party PVSS-DKG protocol in a single
-// process for testing and reference. The simulation:
+// OpenRevealAck is a required, self-documenting barrier value that a
+// caller must pass to RunDKGSimulationOpenRevealTestOnly to confirm
+// it understands the resulting transcript REVEALS THE MASTER. There
+// is exactly one acceptable value; passing anything else fails. This
+// makes the leaking path impossible to call by accident and trivially
+// greppable in a production build review
+// (grep for IUnderstandThisRevealsTheMaster).
+type OpenRevealAck struct{ ack string }
+
+// AckOpenRevealRevealsMaster is the only value RunDKGSimulationOpenReveal
+// TestOnly accepts. Its single field documents the hazard at the call
+// site.
+var AckOpenRevealRevealsMaster = OpenRevealAck{ack: "IUnderstandThisRevealsTheMaster"}
+
+// ErrOpenRevealNotAcknowledged is returned when the open-reveal
+// simulation is invoked without the explicit hazard acknowledgement.
+var ErrOpenRevealNotAcknowledged = errors.New(
+	"magnetar/pvss-dkg: open-reveal simulation reveals the master and is TEST-ONLY; " +
+		"pass AckOpenRevealRevealsMaster to confirm, or use RunDKG for production")
+
+// RunDKGSimulationOpenRevealTestOnly runs an n-party PVSS-DKG in a
+// single process in OPEN-REVEAL mode.
 //
-//  1. Allocates n per-party RNG readers.
-//  2. Each party computes its own Round-1 state (no shared state).
-//  3. Each party broadcasts its public contribution + sends private
-//     shares to every other party.
-//  4. Each party verifies received shares against received commits.
-//  5. Each party publishes Round-2 reveal (open-reveal mode).
-//  6. Any third party verifies the full transcript and derives the
-//     aggregated share envelope.
+// !!! TEST / KAT ONLY. THE OUTPUT TRANSCRIPT REVEALS THE MASTER. !!!
 //
-// The output PVSSTranscript carries every public artifact; an auditor
-// holding (committee, params, threshold, transcript) can reproduce
-// the qualified set Q, the aggregated shares, and the derived public
-// key.
+// Every party publishes its full RevealMsg (PolyCoeffs including the
+// constant terms m_i). The resulting transcript therefore lets ANY
+// observer reconstruct M = sum_i m_i. This is acceptable ONLY for
+// deterministic KAT replay and for exercising the verification logic
+// in tests. It MUST NOT run in a production deployment. The required
+// `ack` barrier makes accidental production use impossible and makes
+// the call site greppable.
 //
-// CRITICAL INVARIANT: the master byte vector M = Σ_{i ∈ Q} m_i mod 257
-// is NEVER assembled by any party's state. Each party knows only:
-//   - Its own m_i (= polyCoeffs[*][0]).
-//   - The shares σ_{i→self} received from every other party.
-//   - The aggregated final share σ_self after Round 2.
-//
-// The master is materialised only inside the PK-derivation closure
-// (deriveDKGPublicKey) which is a separate sibling function the
-// auditor or any third party invokes to extract the public key from
-// the transcript. The party simulation in RunDKGSimulation itself
-// never invokes that closure.
+// For production, use RunDKG (below): its transcript carries
+// Reveals == nil and M is never reconstructible from it.
 //
 // rngs is a slice of n io.Readers, one per party. Pass nil to use
 // crypto/rand.Reader for all parties. Tests use bytes.NewReader of a
 // deterministic vector for KAT replay.
-func RunDKGSimulation(
+func RunDKGSimulationOpenRevealTestOnly(
+	ack OpenRevealAck,
 	params *Params,
 	threshold int,
 	committee []NodeID,
 	rngs []io.Reader,
 ) (*PVSSTranscript, error) {
+	if ack != AckOpenRevealRevealsMaster {
+		return nil, ErrOpenRevealNotAcknowledged
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -943,6 +938,158 @@ func RunDKGSimulation(
 	return tr, nil
 }
 
+// RevealsMaster reports whether this transcript contains the full
+// polynomial reveals (constant terms m_i) that make the master
+// M = sum_i m_i reconstructible by any observer. A production
+// transcript MUST return false. The open-reveal test transcript
+// returns true.
+//
+// A transcript reveals the master iff ANY party's reveal carries a
+// non-empty constant-term coefficient vector.
+func (tr *PVSSTranscript) RevealsMaster() bool {
+	for i := range tr.Reveals {
+		for b := range tr.Reveals[i].PolyCoeffs {
+			if len(tr.Reveals[i].PolyCoeffs[b]) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RunDKG runs the PRODUCTION n-party PVSS-DKG. Unlike the open-reveal
+// test simulation, the transcript it returns carries Reveals == nil:
+// no party publishes its polynomial constant term, so the master
+// M = sum_i m_i is NOT reconstructible from the transcript by any
+// observer. `tr.RevealsMaster()` is false for this output.
+//
+// HONEST LIMITATIONS (read before deploying):
+//
+//  1. SLH-DSA group public-key derivation inherently needs the master.
+//     pk = SLH-DSA.PK(M) is a hash tree over M; there is no way to
+//     compute it from shares without either reconstructing M at some
+//     party or running full MPC over the SHAKE hash tree (open
+//     research). RunDKG reconstructs M transiently inside
+//     deriveDKGPublicKey to compute pk and zeroizes it. That single
+//     reconstruction is the inherent cost; it is NOT published. If you
+//     need NO party to ever hold M (not even transiently for pk
+//     derivation), you must run the TEE-attested path
+//     (luxfi/threshold/protocols/slhdsa-tee) or the dealer path
+//     (NewThbsSeKey) where the dealer is in the TCB for setup only.
+//
+//  2. With hash-based commitments (cSHAKE256 over coefficients), a
+//     recipient CANNOT non-interactively verify a received share
+//     against the public commitments without the dealer's opening,
+//     and the opening includes the constant term. So RunDKG does NOT
+//     exclude malicious dealers at DKG time (it cannot, soundly,
+//     without revealing m_i or switching to group-homomorphic /
+//     encrypted-share+NIZK commitments — a separate construction).
+//     Malformed-share detection is DEFERRED to:
+//     - THBS-SE Combine's per-party commit re-derivation at sign
+//     time, which drops a tampered share and emits slashable
+//     evidence (TestThbsSE_RejectOversizedShareWireSize /
+//     TestThbsSE_RejectTamperedShareCommitMismatch);
+//     - the complaint flow, where an accused party reveals ONLY the
+//     disputed recipient's share value (never the constant term).
+//     Because robust DKG-time dealer exclusion is NOT delivered here,
+//     RunDKG is the no-leak setup path but NOT a robust-against-
+//     malicious-dealers path. For adversarial committees, prefer the
+//     dealer path or the TEE pool. This is labeled, not hidden.
+//
+// The production transcript is consumed by
+// NewThbsSeKeyFromDealerlessDKG, which verifies commitment shape +
+// setup binding (it cannot verify shares without reveals) and derives
+// the share envelopes + group PK.
+//
+// rngs is a slice of n io.Readers, one per party. Pass nil for
+// crypto/rand.
+func RunDKG(
+	params *Params,
+	threshold int,
+	committee []NodeID,
+	rngs []io.Reader,
+) (*PVSSTranscript, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	n := len(committee)
+	if threshold < 1 || n < threshold {
+		return nil, ErrInvalidThreshold
+	}
+	if n > MaxCommittee257 {
+		return nil, ErrCommitteeTooLarge
+	}
+	if rngs != nil && len(rngs) != n {
+		return nil, fmt.Errorf("magnetar/pvss-dkg: rngs length %d does not match committee size %d", len(rngs), n)
+	}
+	for i := 1; i < n; i++ {
+		if bytes.Compare(committee[i-1][:], committee[i][:]) >= 0 {
+			return nil, errors.New("magnetar/pvss-dkg: committee not sorted ascending or contains duplicates")
+		}
+	}
+
+	// Round 1: each party computes its own state; only the PUBLIC
+	// commitments are collected for the transcript.
+	states := make([]*PVSSPartyState, n)
+	contribs := make([]PVSSPublicContribution, n)
+	for i := 0; i < n; i++ {
+		var rng io.Reader
+		if rngs != nil {
+			rng = rngs[i]
+		}
+		st, err := NewPVSSPartyState(params, threshold, committee, uint32(i+1), rng)
+		if err != nil {
+			return nil, fmt.Errorf("magnetar/pvss-dkg: party %d Round-1 setup: %w", i+1, err)
+		}
+		states[i] = st
+		contribs[i] = st.PublicContribution()
+	}
+
+	// Round 2 (private share distribution): each recipient stores the
+	// shares it received. These are published as part of the transcript
+	// (they are Shamir leaves, which leak nothing about any individual
+	// m_i below the threshold, and are needed to aggregate the final
+	// shares). NOTE: a recipient publishing a share row reveals only
+	// other parties' leaves AT THAT RECIPIENT'S point — not constant
+	// terms.
+	receivedShares := make([][][]uint16, n)
+	for j := 0; j < n; j++ {
+		receivedShares[j] = make([][]uint16, n)
+		for i := 0; i < n; i++ {
+			row, err := states[i].ShareTo(uint32(j + 1))
+			if err != nil {
+				return nil, fmt.Errorf("magnetar/pvss-dkg: party %d ShareTo(%d): %w", i+1, j+1, err)
+			}
+			receivedShares[j][i] = row
+		}
+	}
+
+	setupTr := pvssSetupTranscript(params, threshold, committee)
+
+	// Production transcript: Reveals is nil. The master is NOT
+	// reconstructible from this transcript.
+	tr := &PVSSTranscript{
+		Params:         params,
+		Committee:      committee,
+		Threshold:      threshold,
+		Contributions:  contribs,
+		Reveals:        nil,
+		ReceivedShares: receivedShares,
+		SetupTr:        setupTr,
+	}
+
+	for i := 0; i < n; i++ {
+		zeroizePartyState(states[i])
+	}
+
+	if tr.RevealsMaster() {
+		// Defense in depth: a production transcript that somehow
+		// carries constant-term reveals must never be returned.
+		return nil, errors.New("magnetar/pvss-dkg: internal error: production transcript reveals master")
+	}
+	return tr, nil
+}
+
 // AggregateShareEnvelope aggregates the received shares for party j
 // across the qualified set Q. Returns the GF(257) share vector
 // σ_j[b] = Σ_{i ∈ Q} σ_{i→j}[b] mod 257. This is the input to the
@@ -972,16 +1119,31 @@ func (*Params) committeeSize(committee []NodeID) int {
 	return len(committee)
 }
 
-// VerifyDKGTranscript is the public auditor's entry point. Given a
-// PVSSTranscript, recomputes the qualified set Q via per-party
-// commitment + share verification, computes the FIPS 205 public key
-// via Lagrange interpolation of the master master across any t
-// qualified shares, and returns (Q, pk, error).
+// VerifyDKGTranscript is the public auditor's entry point. It returns
+// the qualified set Q, the derived FIPS 205 group public key, and an
+// error. It dispatches on the transcript type:
 //
-// The master is reconstructed transiently inside a closure named
-// lagrangeScratch, immediately fed to KeyFromSeed, and zeroized at
-// the closure boundary. No party state outside this closure ever
-// holds the master.
+//   - PRODUCTION transcript (tr.Reveals == nil, tr.RevealsMaster() ==
+//     false): verifies commitment shape + setup binding + received-
+//     share shape. It CANNOT verify shares against commitments
+//     (hash commitments are not openable without the constant-term
+//     reveal), so it does NOT exclude malicious dealers at this stage:
+//     every party with well-shaped commitments is qualified, and
+//     malformed-share detection is deferred to THBS-SE Combine's
+//     sign-time commit binding + the complaint flow. This is the
+//     no-leak path; see RunDKG's HONEST LIMITATIONS.
+//
+//   - OPEN-REVEAL transcript (tr.Reveals populated, tr.RevealsMaster()
+//     == true): the TEST/KAT path. It additionally re-derives every
+//     commitment from the published reveals and checks every received
+//     share against the revealed polynomial, excluding any party whose
+//     reveal is inconsistent. This path REVEALS THE MASTER and is for
+//     tests / KATs only.
+//
+// In both cases the group public key is derived in deriveDKGPublicKey,
+// which transiently reconstructs the master to compute pk and zeroizes
+// it (the inherent SLH-DSA cost; see RunDKG limitation 1). The
+// reconstruction is internal to this function and is never published.
 func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, error) {
 	if tr == nil {
 		return nil, nil, errors.New("magnetar/pvss-dkg: nil transcript")
@@ -994,9 +1156,6 @@ func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, e
 		return nil, nil, ErrInvalidThreshold
 	}
 	if len(tr.Contributions) != n {
-		return nil, nil, ErrPVSSWrongShape
-	}
-	if len(tr.Reveals) != n {
 		return nil, nil, ErrPVSSWrongShape
 	}
 	if len(tr.ReceivedShares) != n {
@@ -1014,6 +1173,11 @@ func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, e
 		return nil, nil, errors.New("magnetar/pvss-dkg: transcript setup_tr mismatch")
 	}
 
+	openReveal := tr.RevealsMaster()
+	if openReveal && len(tr.Reveals) != n {
+		return nil, nil, ErrPVSSWrongShape
+	}
+
 	qualified := make(map[uint32]struct{}, n)
 	for i := 0; i < n; i++ {
 		qualified[uint32(i+1)] = struct{}{}
@@ -1023,6 +1187,34 @@ func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, e
 			delete(qualified, uint32(i+1))
 			continue
 		}
+		// Commitment shape check applies to both paths: every party
+		// must publish n_coeff = threshold commitments per byte.
+		if !pvssCommitShapeOK(tr.Params, tr.Threshold, tr.Contributions[i]) {
+			delete(qualified, uint32(i+1))
+			continue
+		}
+		// Received-share shape check (both paths).
+		for j := 0; j < n; j++ {
+			if len(tr.ReceivedShares[j]) <= i || len(tr.ReceivedShares[j][i]) != tr.Params.SeedSize {
+				delete(qualified, uint32(i+1))
+				break
+			}
+		}
+		if _, still := qualified[uint32(i+1)]; !still {
+			continue
+		}
+
+		if !openReveal {
+			// Production path: hash commitments cannot be opened without
+			// the constant-term reveal, so no DKG-time share verification
+			// is possible. A well-shaped party is qualified; malformed
+			// shares are caught at sign time (THBS-SE commit binding) and
+			// via the complaint flow. See RunDKG limitation 2.
+			continue
+		}
+
+		// Open-reveal path (TEST/KAT): full verification against the
+		// published reveals.
 		if tr.Reveals[i].NodeID != tr.Committee[i] {
 			delete(qualified, uint32(i+1))
 			continue
@@ -1036,10 +1228,6 @@ func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, e
 			continue
 		}
 		for j := 0; j < n; j++ {
-			if len(tr.ReceivedShares[j]) <= i {
-				delete(qualified, uint32(i+1))
-				break
-			}
 			failedBytes, err := VerifyShareConsistency(tr.Params, tr.Reveals[i], uint32(j+1), tr.ReceivedShares[j][i])
 			if err != nil {
 				return nil, nil, err
@@ -1062,17 +1250,45 @@ func VerifyDKGTranscript(tr *PVSSTranscript) (map[uint32]struct{}, *PublicKey, e
 	return qualified, pk, nil
 }
 
-// deriveDKGPublicKey is the public-key-derivation closure. It is the
-// single point in the PVSS-DKG path where the master byte vector is
-// transiently assembled — into the local variable `lagrangeScratch`,
-// which is consumed by KeyFromSeed and zeroized immediately.
+// pvssCommitShapeOK reports whether a public contribution has the
+// canonical commitment shape: SeedSize byte-rows, each with exactly
+// `threshold` 32-byte commitments. Pure shape check (no secret access).
+func pvssCommitShapeOK(params *Params, threshold int, contrib PVSSPublicContribution) bool {
+	if len(contrib.Commits) != params.SeedSize {
+		return false
+	}
+	for b := 0; b < params.SeedSize; b++ {
+		if len(contrib.Commits[b]) != threshold {
+			return false
+		}
+		for d := 0; d < threshold; d++ {
+			if len(contrib.Commits[b][d]) != 32 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// deriveDKGPublicKey computes the FIPS 205 group public key from the
+// transcript. To do so it RECONSTRUCTS the master byte vector into
+// `lagrangeScratch`, feeds it to KeyFromSeed, and zeroizes it.
 //
-// The buffer is named `lagrangeScratch` (not any of the v1.0 master-
-// naming patterns) so the strict-atom grep audit of THBSSE-Combine
-// continues to pass; the strict-atom discipline applies to the SIGN
-// side of the protocol, and the SETUP side's transient buffer here
-// is at a strictly weaker discipline (transient, named non-canonically,
-// zeroized at scope exit).
+// This reconstruction is PK-derivation-only and is INHERENT, not a
+// shortcut: pk = SLH-DSA.PK(M) is a hash tree over M, so there is no
+// way to derive pk from shares without reconstructing M somewhere (or
+// running full MPC over the SHAKE hash tree — open research). The
+// reconstruction is internal to this function and is NEVER published;
+// only the public key bytes are returned. It runs at whoever calls
+// VerifyDKGTranscript (an auditor or any party deriving the group pk).
+//
+// This is the same fundamental barrier as THBS-SE Combine: producing
+// or deriving anything SLH-DSA-shaped from a shared seed touches the
+// seed. Deployments that must guarantee NO party ever holds M (not
+// even transiently for pk derivation) route this through the
+// TEE-attested path (luxfi/threshold/protocols/slhdsa-tee) or use the
+// dealer path. The buffer name `lagrangeScratch` is incidental; it is
+// not a security property.
 func deriveDKGPublicKey(tr *PVSSTranscript, qualified map[uint32]struct{}) (*PublicKey, error) {
 	L := tr.Params.SeedSize
 	n := len(tr.Committee)

@@ -3,20 +3,26 @@
 
 package magnetar
 
-// thbsse_assemble_test.go --- the strict-atom invariant + byte-identity
-// regression suite for the v1.1 Combine path.
+// thbsse_assemble_test.go --- an identifier-hygiene lint + byte-identity
+// regression suite for the THBS-SE Combine path.
 //
 // Coverage matrix:
 //
-//   TestThbsSE_StrictAtom_NoTransientSeed
-//     - load-bearing AST invariant: parse thbsse_assemble.go and
-//       slhdsa_internal.go and assert no identifier in either file
-//       matches the forbidden patterns:
+//   TestThbsSE_AssembleIdentHygiene
+//     - IDENTIFIER-HYGIENE LINT (NOT a security property): parse
+//       thbsse_assemble.go and slhdsa_internal.go and assert no
+//       identifier matches the patterns:
 //           SK\.seed | SK\.prf | sk_seed | sk_prf
 //       PLUS no Go identifier named exactly:
 //           seed | SkSeed | SK | SkPrf | PrfKey | prfKey
-//       (these are the v1.0 named-variable forms the strict-atom
-//       invariant forbids in the assemble path).
+//     - This checks variable NAMES, nothing else. It does NOT show
+//       that the master seed is absent from memory. It IS absent as a
+//       variable *named* `seed`, but assembleSignatureBytes still
+//       reconstructs the full FIPS 205 master into the buffer
+//       `derivedMaterial` (skSeed||skPrf||pkSeed) at the public
+//       combiner — see ASSEMBLE-INVARIANT.md and
+//       BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11. The lint guards the
+//       naming convention; it is not a no-leak proof.
 //
 //   TestSlhdsaInternal_ByteEqualToCirclSign
 //     - byte-identity: assemble FIPS 205 signature bytes via the
@@ -52,16 +58,17 @@ func readFileForTest(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// forbiddenIdentRegex captures the literal grep target from the v1.1
-// blocker spec. Any identifier OR comment substring matching this
-// regex is a strict-atom invariant violation IN CODE positions; we
-// allow it in package-level doc comments (the leading // banner) by
-// stripping comments before scanning identifiers.
+// forbiddenIdentRegex captures the name-pattern grep target. Any
+// identifier OR comment substring matching this regex is an
+// ident-hygiene lint hit IN CODE positions; we allow it in
+// package-level doc comments (the leading // banner) by stripping
+// comments before scanning identifiers.
 var forbiddenIdentRegex = regexp.MustCompile(`SK\.seed|SK\.prf|sk_seed|sk_prf`)
 
-// forbiddenIdentExact is the v1.0 named-variable set the strict-atom
-// invariant explicitly forbids in the assemble path's AST. Matches
-// against the IDENTIFIER STRING (case-sensitive, exact).
+// forbiddenIdentExact is the named-variable set the ident-hygiene lint
+// flags in the assemble path's AST. Matches against the IDENTIFIER
+// STRING (case-sensitive, exact). This is a naming convention, NOT a
+// security property: a seed under any other name is not caught.
 var forbiddenIdentExact = map[string]struct{}{
 	"seed":    {},
 	"SkSeed":  {},
@@ -78,18 +85,16 @@ var forbiddenIdentExact = map[string]struct{}{
 // Every node in this file's AST is checked against the forbidden set.
 const strictAtomPath = "thbsse_assemble.go"
 
-// TestThbsSE_StrictAtom_NoTransientSeed is the load-bearing AST
-// invariant gate for the v1.1 strict-atom Combine path. The test
-// parses thbsse_assemble.go and slhdsa_internal.go, walks the AST,
-// and asserts that no identifier name --- variable, field, parameter,
-// function name --- matches the forbidden v1.0 named-seed patterns.
-//
-// The grep-equivalent check is also run as a defense-in-depth on the
-// raw file bytes, with comments stripped: this catches any name the
-// AST walker might miss (e.g. inside struct tags) and matches the
-// shape of the audit grep specified in the v1.1 blocker
-// (`grep -rE "SK\.seed|SK\.prf|sk_seed|sk_prf" thbsse_assemble.go`).
-func TestThbsSE_StrictAtom_NoTransientSeed(t *testing.T) {
+// TestThbsSE_AssembleIdentHygiene is an IDENTIFIER-HYGIENE LINT, not a
+// security gate. The test parses thbsse_assemble.go and
+// slhdsa_internal.go, walks the AST, and asserts that no identifier
+// name matches the named-seed patterns. Passing this lint means the
+// code does not SPELL a variable `seed`/`skSeed`/...; it does NOT mean
+// the seed is absent from memory. assembleSignatureBytes reconstructs
+// the FIPS 205 master into `derivedMaterial` regardless of what the
+// buffer is named (ASSEMBLE-INVARIANT.md). A name lint cannot stand in
+// for a no-leak proof, and this one does not claim to.
+func TestThbsSE_AssembleIdentHygiene(t *testing.T) {
 	t.Parallel()
 
 	// Locate the source file. Go test runs in the package directory,
@@ -128,10 +133,10 @@ func TestThbsSE_StrictAtom_NoTransientSeed(t *testing.T) {
 
 	if len(violations) > 0 {
 		for _, v := range violations {
-			t.Errorf("strict-atom invariant violation: identifier %q at %s:%d (kind=%s)",
+			t.Errorf("assemble ident-hygiene lint: identifier %q at %s:%d (kind=%s)",
 				v.name, filepath.Base(v.file), v.line, v.kind)
 		}
-		t.Fatalf("%d strict-atom invariant violation(s) in %s", len(violations), strictAtomPath)
+		t.Fatalf("%d assemble ident-hygiene lint hit(s) in %s", len(violations), strictAtomPath)
 	}
 
 	// Defense in depth: scan the RAW file bytes (comments included)
@@ -145,7 +150,7 @@ func TestThbsSE_StrictAtom_NoTransientSeed(t *testing.T) {
 	// of the four sentinel patterns appears.
 	rawBytes := mustReadFile(t, path)
 	if matches := forbiddenIdentRegex.FindAllString(string(rawBytes), -1); len(matches) > 0 {
-		t.Fatalf("strict-atom grep invariant violation: %d match(es) in %s (raw bytes, comments included): %v",
+		t.Fatalf("assemble ident-hygiene grep lint: %d match(es) in %s (raw bytes, comments included): %v",
 			len(matches), strictAtomPath, matches)
 	}
 
@@ -443,15 +448,15 @@ func benchV10EquivalentSignMode(b *testing.B, mode Mode, n, t int) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		r1s := make([]ThbsSeRound1Msg, 0, t)
+		// Only the Round-2 partial sigs are needed below; r1 is the
+		// commitment and is not consumed by this v1.0-equivalent path.
 		r2s := make([]ThbsSeRound2Msg, 0, t)
 		for j := 0; j < t; j++ {
 			guard := NewThbsSeSlotGuard()
-			r1, r2, err := ThbsSeRound1(params, key.Shares[j], binding, msg, guard, nil)
+			_, r2, err := ThbsSeRound1(params, key.Shares[j], binding, msg, guard, nil)
 			if err != nil {
 				b.Fatalf("Round1[%d]: %v", j, err)
 			}
-			r1s = append(r1s, r1)
 			r2s = append(r2s, r2)
 		}
 		// Drive the v1.0-equivalent emit path: Shamir-reconstruct,

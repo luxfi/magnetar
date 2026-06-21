@@ -1,16 +1,22 @@
-# Magnetar v1.2 --- SLH-DSA (FIPS 205) for Lux
+# Magnetar --- SLH-DSA (FIPS 205) for Lux
 
-Magnetar v1.2 ships ONE construction surface to each of the two
-deployment regimes Lux ecosystem chains need, with the strict-atom
-Combine path closing `MAGNETAR-STRICT-ATOM-V11` and the dealerless
-PVSS-DKG closing `MAGNETAR-PVSS-DKG-V11`:
+Magnetar is the hash-based PQ leg. SLH-DSA has no aggregatable
+structure, so the SOUND production primitive is per-validator
+standalone (N independent signatures); the threshold variants either
+relocate trust into attested hardware (TEE pool) or are research-grade
+(permissionless THBS-SE, which reconstructs the master at the public
+combiner).
 
-| Regime | Construction | Where it lives |
-|---|---|---|
-| Public-BFT consensus on Lux L1/L2 (mainnet, testnet, devnet, white-label) | **Per-validator standalone** --- each validator holds its own FIPS 205 keypair, signs independently, consensus collects N signatures into a `ValidatorAggregateCert` | `ref/go/pkg/magnetar/standalone.go` |
-| Permissionless t-of-n threshold for verifier-side single-signature certificates | **THBS-SE (strict-atom Combine)** --- t-of-n committee, slot-bound commit-and-reveal, anyone-can-combine public combiner, Magnetar-internal FIPS 205 sec 5--sec 8 walk with no named transient seed binder | `ref/go/pkg/magnetar/thbsse.go` + `thbsse_field.go` + `thbsse_assemble.go` + `slhdsa_internal.go` |
+| Regime | Construction | Posture | Where |
+|---|---|---|---|
+| **Public-BFT consensus (DEFAULT, production)** | **Per-validator standalone** --- each validator holds its own FIPS 205 keypair, signs independently, consensus collects N signatures into a `ValidatorAggregateCert` | SOUND. No DKG, no dealer, no reconstruction. | `standalone.go` |
+| **Trusted-hardware / custody (opt-in, production)** | **TEE-attested combiner pool** | SOUND under an honest trust model: the seed is reconstructed inside a measured enclave on t hosts that must agree --- trust-relocation (adds a host to the TCB), NOT MPC. | `luxfi/threshold/protocols/slhdsa-tee` |
+| **Permissionless t-of-n threshold** | **THBS-SE** --- t-of-n committee, slot-bound commit-and-reveal, anyone-can-combine public combiner | RESEARCH-ONLY. The public combiner RECONSTRUCTS the full FIPS 205 master every signature (`ASSEMBLE-INVARIANT.md`). NOT no-leak. | `thbsse.go`, `thbsse_field.go`, `thbsse_assemble.go`, `slhdsa_internal.go` |
 
-Both produce FIPS 205 wire bytes that an unmodified verifier accepts.
+All three produce FIPS 205 wire bytes that an unmodified verifier
+accepts. That is a correctness/interop property; it says nothing about
+confidentiality. See `BLOCKERS.md` for the sound/open/falsely-closed
+breakdown.
 
 ## Per-validator standalone (public-BFT primary)
 
@@ -49,14 +55,17 @@ the function returns, no party (including the dealer) holds the
 master. Recommended for foundation-HSM single-host bootstrap and
 KAT replay.
 
-**Dealerless PVSS-DKG setup (no trusted dealer).** Each committee
-party runs `NewPVSSPartyState` independently, publishes a
-`PublicContribution` (per-coefficient hash commitments only),
-distributes private share rows over authenticated channels, and
-publishes a `RevealMsg` at Round 2. Any third party collates the
+**Dealerless PVSS-DKG setup (`RunDKG`).** Each committee party runs
+`NewPVSSPartyState` independently, publishes a `PublicContribution`
+(per-coefficient hash commitments only), and distributes private share
+rows over authenticated channels. The PRODUCTION path (`RunDKG`)
+publishes NO constant-term reveals, so the master is not
+reconstructible from the transcript. Any third party collates the
 public payloads into a `PVSSTranscript` and invokes
-`NewThbsSeKeyFromDealerlessDKG` to assemble the canonical
-`ThbsSeKey`:
+`NewThbsSeKeyFromDealerlessDKG` to assemble the canonical `ThbsSeKey`.
+(A separate `RunDKGSimulationOpenRevealTestOnly`, gated behind an
+explicit hazard ack, runs the leaking open-reveal mode for KAT replay
+only.):
 
 ```go
 // Each party i runs in its own process.
@@ -77,41 +86,37 @@ key, _ := magnetar.NewThbsSeKeyFromDealerlessDKG(transcript)
 // implicit master M = sum_{i in Q} m_i mod 257 byte-wise.
 ```
 
-The dealerless path enforces the hard invariant: **no party (and no
-transient dealer) ever holds the master byte vector at any time
-during setup**. The implicit master is only materialised inside the
-`deriveDKGPublicKey` closure (named `lagrangeScratch`, zeroized at
-closure exit) when an auditor invokes `VerifyDKGTranscript` to
-derive the public key.
+**What the production dealerless path guarantees (and what it does
+not).** The `RunDKG` transcript carries no constant-term reveals, so
+the master is not reconstructible from the transcript by observers.
+It does NOT make "no party ever holds the master" true: deriving the
+group public key needs `pk = SLH-DSA.PK(M)` (a hash tree over M), so
+`deriveDKGPublicKey` reconstructs M transiently at whoever derives pk
+and zeroizes it. That reconstruction is inherent (TEE/MPC only avoid
+it). Naming the buffer `lagrangeScratch` is not a security property.
+See `BLOCKERS.md` (P2) and `RunDKG`'s HONEST LIMITATIONS in
+`pvss_dkg.go`. The production path also does NOT robustly exclude
+malicious dealers at DKG time (hash commitments aren't openable
+without revealing m_i); malformed shares are caught at sign time.
 
-For reference, the `RunDKGSimulation` helper runs the full n-party
-protocol in a single test process (every party's state in one heap)
-for KAT replay and benchmark purposes; production deployments should
-run each party in its own process.
+`RunDKGSimulationOpenRevealTestOnly` runs the full n-party protocol in
+one process in open-reveal mode for KAT replay only; it requires an
+explicit hazard ack and its transcript REVEALS the master.
 
-**Hard invariant** (THBS-SE construction): a revealed value is allowed
-ONLY if it is also present in the final SLH-DSA signature.
+**THBS-SE reveal discipline.** A revealed value is the per-round mask
+`r_i`, the masked share `s'_i = share_i XOR r_i`, the public commit
+hash, and the final signature. The share envelope is per-slot and the
+slot guard refuses same-slot re-emission.
 
-- ALLOWED reveals: the per-round mask `r_i`, the masked share
-  `s'_i = share_i XOR r_i`, the public commit hash, the final FIPS
-  205 signature bytes.
-- FORBIDDEN reveals: `SK.seed` in any party-local persistent form;
-  `SK.prf`; future-slot share material. The slot guard refuses any
-  same-slot re-emission, and the share envelope is per-slot.
-
-**No-aggregator property**: The public combiner is a PURE function of
-its inputs. Any peer --- validator, block proposer, RPC node, passive
-watcher --- can run Combine. There is no privileged aggregator role
-and no host in the TCB at sign time. (The strict-atom Combine path
-at v1.1 closed the residual transient-seed-at-combiner gap; see
-`BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11` for the closure summary.)
-
-**No-trusted-dealer property**: The PVSS-DKG setup path
-(`NewThbsSeKeyFromDealerlessDKG`, v1.2) eliminates the trusted
-dealer from setup. No party (and no transient dealer) ever holds
-the master byte vector at any time during setup. See
-`BLOCKERS.md::MAGNETAR-PVSS-DKG-V11` for the closure summary and
-`pvss_dkg.go` for the construction.
+**The public combiner reconstructs the master.** Any peer can run
+Combine (it is a pure function of public inputs), but it RECONSTRUCTS
+the full FIPS 205 master into `derivedMaterial` to produce the
+signature (`ASSEMBLE-INVARIANT.md`). So there IS effectively a host in
+the TCB at sign time: whoever runs Combine sees the seed. This is why
+the permissionless THBS-SE path is research-grade. The earlier claim
+that the "strict-atom Combine closed the transient-seed gap" was proof
+by rename (it avoids the variable name `seed`, not the reconstruction);
+see `BLOCKERS.md::MAGNETAR-STRICT-ATOM` (OPEN).
 
 **Slot binding**: every signature is bound to
 `(chain_id, epoch, slot, height, committee_id, message_domain)`. The
@@ -146,21 +151,26 @@ FROST-style linear share-aggregation. The literature confirms:
   full MPC over the SHA-256/SHAKE hash tree (multi-second per
   signature, multi-megabyte of comms).
 
-THBS-SE chooses (a) with a PUBLIC COMBINER --- anyone-can-combine,
-no host in TCB. The per-validator standalone path sidesteps (a) and
-(b) entirely by emitting N independent signatures.
+THBS-SE chooses (a) with a PUBLIC COMBINER. "Anyone can combine", but
+whoever does RECONSTRUCTS the seed --- so the combiner IS effectively a
+host in the TCB at sign time, which is why THBS-SE is research-grade,
+not production. The TEE pool chooses (a) inside attested hardware
+(trust-relocated, not removed). The per-validator standalone path
+sidesteps (a) and (b) entirely by emitting N independent signatures and
+is the production default.
 
 ## Status
 
 | Field | Value |
 |---|---|
-| Standard | FIPS 205 SLH-DSA (single-party + per-validator standalone aggregate + THBS-SE permissionless threshold) |
-| Constructions | 2 (per-validator standalone, THBS-SE) |
+| Standard | FIPS 205 SLH-DSA |
+| Production primitive | Per-validator standalone (`standalone.go`) --- SOUND |
+| Opt-in production | TEE-attested combiner pool (`luxfi/threshold/protocols/slhdsa-tee`) --- sound under attested-hardware trust |
+| Research-only | THBS-SE permissionless threshold --- reconstructs the master at the public combiner |
 | Reference implementation | `ref/go/pkg/magnetar/` --- pure Go, depends on `cloudflare/circl/sign/slhdsa` v1.6.3 |
 | KAT vectors | `vectors/{keygen,sign,verify,thbsse-sign}.json` (deterministic regeneration) |
-| Wire identity | Both Magnetar primitives emit byte-identical FIPS 205 signatures; any unmodified slhdsa verifier accepts |
-| Tag | `v1.2.0` |
-| Cert-profile role | Polaris profile in `luxfi/quasar` (hash-based leg of the maximum-assurance cross-family PQ profile) |
+| Wire identity | All paths emit byte-identical FIPS 205 signatures; any unmodified slhdsa verifier accepts. Interop only --- not a confidentiality claim. |
+| Cert-profile role | Polaris profile in `luxfi/quasar` (hash-based leg of the cross-family PQ profile) |
 | Sibling primitives | Pulsar (FIPS 204 M-LWE), Corona (R-LWE) --- algorithmically distinct families |
 
 ## Headline tests
@@ -174,17 +184,22 @@ cd ref/go && GOWORK=off go test -count=1 -short -timeout 600s ./pkg/magnetar/...
   `cloudflare/circl/sign/slhdsa.Verify` across all 3 SHAKE modes.
 - `TestThbsSE_Wire_FIPS205Verifiable` (thbsse_test.go) --- pins the
   same identity for the THBS-SE public combiner output.
-- `TestThbsSE_RejectSeedReveal`, `TestThbsSE_RejectUnselectedFORS`,
-  `TestThbsSE_RejectUnselectedWOTS`, `TestThbsSE_SlotReuseRejected`,
-  `TestThbsSE_OverselectedCommittee`,
-  `TestThbsSE_SlotBindingDomainSeparation` --- the 6 invariant gates
-  for the THBS-SE construction.
-- `TestPVSS_DKG_NoSinglePartyHoldsMaster`,
-  `TestPVSS_DKG_ByteCompatWithDealerPath`,
+- `TestThbsSE_RejectSeedReveal`,
+  `TestThbsSE_RejectOversizedShareWireSize`,
+  `TestThbsSE_RejectTamperedShareCommitMismatch`,
+  `TestThbsSE_SlotReuseRejected`, `TestThbsSE_OverselectedCommittee`,
+  `TestThbsSE_SlotBindingDomainSeparation` --- the THBS-SE
+  commit-binding / slot-binding gates. (The last two reject-tests were
+  formerly mis-named ...UnselectedFORS / ...WOTS; THBS-SE shares the
+  whole seed, so they test commit binding, not atom selection.)
+- `TestPVSS_DKG_ProductionTranscriptHidesMaster` --- the production
+  `RunDKG` transcript hides the master (P2 leak-fix regression gate);
+  the open-reveal path reveals it (contrast).
+- `TestPVSS_DKG_ByteCompatWithDealerPath`,
   `TestPVSS_DKG_AdversarialReveals`,
   `TestPVSS_DKG_RobustnessAgainstMaliciousCommitments`,
-  `TestPVSS_DKG_EndToEnd_SignAndVerify` --- the 5 invariant gates
-  for the dealerless PVSS-DKG setup path (v1.2).
+  `TestPVSS_DKG_EndToEnd_SignAndVerify` --- further DKG gates
+  (the end-to-end test drives the production `RunDKG` path).
 - `BenchmarkThbsSE_Sign_5of7/Magnetar-SHAKE-192f` --- end-to-end
   per-signature wall-clock at < 100 ms/op on Apple M1.
 - `TestKAT_ThbsSe` --- deterministic vector replay at (n=7, t=4) x 3
@@ -215,10 +230,12 @@ M-LWE + Corona R-LWE) with hash-based PQ (Magnetar SLH-DSA).
 - `CHANGELOG.md` --- release-by-release framing.
 - `DEPLOYMENT-RUNBOOK.md` --- public-BFT default + the v1.0 honest
   open item (transient seed reconstruction at the public combiner).
-- `BLOCKERS.md` --- the v1.1 roadmap (strict-atom-assembly path).
-- `CRYPTOGRAPHER-SIGN-OFF.md` --- internal review trail.
+- `BLOCKERS.md` --- sound / open / falsely-closed enumeration
+  (THBS-SE reconstructs the master; PVSS-DKG leak fix; TEE trust model).
+- `CRYPTOGRAPHER-SIGN-OFF.md` --- internal review (standalone only).
 - `TRUSTED-COMPUTING-BASE.md` --- TCB enumeration.
-- `PROOF-CLAIMS.md` --- proof-roadmap inventory.
+- `PROOF-CLAIMS.md` --- per-property proven/asserted/open (no
+  mechanized threshold proof exists).
 - `AXIOM-INVENTORY.md` --- assumed-axiom enumeration.
 - `FIPS-TRACEABILITY.md` --- line-by-line FIPS 205 conformance trace.
 - `PATENTS.md` --- patent-status notes.
@@ -233,8 +250,9 @@ M-LWE + Corona R-LWE) with hash-based PQ (Magnetar SLH-DSA).
 - `GPU-PORT-PLAN.md` --- v1.3 GPU acceleration port plan (four
   batched FIPS 205 hash-tree kernels at
   `lux-private/gpu-kernels/ops/crypto/slhdsa/`).
-- `SECURITY.md` --- threat model + strict-PQ profile closure.
-- `ASSEMBLE-INVARIANT.md` --- strict-atom Combine invariant.
+- `SECURITY.md` --- threat model + strict-PQ profile.
+- `ASSEMBLE-INVARIANT.md` --- what the THBS-SE Combine path actually
+  does (it reconstructs the master; "strict-atom" was proof-by-rename).
 
 ## Build
 
