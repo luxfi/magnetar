@@ -46,12 +46,18 @@ EVER reconstructs SK.seed, even transiently in memory" --- requires
 the v1.1 strict-atom-assembly path tracked at
 `BLOCKERS.md::MAGNETAR-STRICT-ATOM-V11`.
 
-Magnetar v1.0 routes the final FIPS 205 byte production via
-`circl/slhdsa.SignDeterministic` on a seed reconstructed by the
-PUBLIC COMBINER. The seed is briefly present in the public combiner's
-memory for one Sign call and is zeroized before return. The combiner
-role is PUBLIC --- anyone can be the combiner --- and there is no
-long-lived secret material outside party-local Shamir leaves.
+Magnetar v1.0 routes the final FIPS 205 byte production via the
+Magnetar-internal `slhSignAtom` engine (`thbsse_assemble.go`) on a
+master reconstructed by the PUBLIC COMBINER; the emitted bytes are
+byte-identical to `circl/slhdsa.SignDeterministic` on that same master
+(pinned by `TestSlhdsaInternal_ByteEqualToCirclSign` and
+`TestThbsSE_StrictAtom_Combine_ByteIdentityToCircl`). The master is
+briefly present in the public combiner's memory for one Sign call and
+is zeroized before return. The combiner role is PUBLIC --- anyone can
+be the combiner --- and there is no long-lived secret material outside
+party-local Shamir leaves. (The authoritative current description of
+this path is `ASSEMBLE-INVARIANT.md`; this is the RESEARCH-ONLY leg,
+not production --- see §1.0 of `SPEC.md`.)
 
 This is materially stronger than a TEE-attested privileged-aggregator
 model (no host is in the TCB) and materially weaker than the strict
