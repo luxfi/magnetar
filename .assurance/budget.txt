@@ -1,0 +1,10 @@
+# Unproven-assertion budget (max counts). Enforced by
+# ~/work/lux/proofs/framework/checks/axiom-budget.sh. FAILS on any drift above.
+# Goal: decrease, never raise. Current surface (2026-06), after deleting the
+# circular/vacuous strict-atom proofs. The remaining 4 sorry + 4 admit are in
+# SUPPORTING (non-load-bearing) lemmas, disclosed in PROOF-CLAIMS; the headline
+# threshold claim is now honestly "research-only", not "proven".
+SORRY=4
+ADMIT=4
+AXIOM=0
+VACUOUS=0
