@@ -1,9 +1,19 @@
 # Unproven-assertion budget (max counts). Enforced by
 # ~/work/lux/luxfi/security/framework/checks/axiom-budget.sh. FAILS on any drift above.
 # Goal: decrease, never raise. Current surface (2026-06), after deleting the
-# circular/vacuous strict-atom proofs. The remaining 4 sorry + 4 admit are in
-# SUPPORTING (non-load-bearing) lemmas, disclosed in PROOF-CLAIMS; the headline
-# threshold claim is now honestly "research-only", not "proven".
+# circular/vacuous strict-atom proofs.
+#
+# HONEST ACCOUNTING of these counts: the proof tree contains NO live
+# `sorry`/`admit` tactic and NO theorem/lemma/axiom at all — the three
+# remaining .ec/.lean files are 0-content scaffolds (verified: grep for
+# theorem|lemma|axiom|sorry|admit|def over proofs/ returns zero matches).
+# axiom-budget.sh counts the WORDS "sorry"/"admit" wherever they appear in
+# .ec/.lean files, and they appear here only inside the scaffold BANNERS that
+# *describe the deleted cheats* (e.g. "whose proof body was `sorry`", "by
+# `admit`"). So SORRY=4/ADMIT=4 is prose-in-banners, not unproven assertions.
+# The budget is held at the current banner word-count so any genuinely NEW
+# live sorry/admit (which would also add theorem/lemma machinery) trips the
+# gate. The headline threshold claim is honestly "research-only", not "proven".
 SORRY=4
 ADMIT=4
 AXIOM=0
