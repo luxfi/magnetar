@@ -1,0 +1,23 @@
+{
+  "version": 4,
+  "echash": "r2026.05-16-g76bf9e9",
+  "root": { "kind": "ec", "digest": "39b4713e553436b188370f9ba116ab50" },
+  "trace": null,
+  "depends": {
+    "Logic": {
+      "direct": true,
+      "kind": "ec",
+      "digest": "6b500cdc50293d9b0674166fdcc73d7e"
+    },
+    "Pervasive": {
+      "direct": true,
+      "kind": "ec",
+      "digest": "6547baf21b77e623ccd2078cc1a92306"
+    },
+    "Tactics": {
+      "direct": true,
+      "kind": "ec",
+      "digest": "86b1b5cd82f32d0405a70279cdc8b67b"
+    }
+  }
+}

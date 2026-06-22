@@ -3,18 +3,16 @@
 # Goal: decrease, never raise. Current surface (2026-06), after deleting the
 # circular/vacuous strict-atom proofs.
 #
-# HONEST ACCOUNTING of these counts: the proof tree contains NO live
-# `sorry`/`admit` tactic and NO theorem/lemma/axiom at all — the three
-# remaining .ec/.lean files are 0-content scaffolds (verified: grep for
-# theorem|lemma|axiom|sorry|admit|def over proofs/ returns zero matches).
-# axiom-budget.sh counts the WORDS "sorry"/"admit" wherever they appear in
-# .ec/.lean files, and they appear here only inside the scaffold BANNERS that
-# *describe the deleted cheats* (e.g. "whose proof body was `sorry`", "by
-# `admit`"). So SORRY=4/ADMIT=4 is prose-in-banners, not unproven assertions.
-# The budget is held at the current banner word-count so any genuinely NEW
-# live sorry/admit (which would also add theorem/lemma machinery) trips the
-# gate. The headline threshold claim is honestly "research-only", not "proven".
-SORRY=4
-ADMIT=4
+# HONEST ACCOUNTING: the proof tree contains NO live `sorry`/`admit` tactic and
+# NO theorem/lemma/axiom — the remaining .ec/.lean files are 0-content scaffolds.
+# axiom-budget.sh is now COMMENT-AWARE (it strips (* *) / -- / /- -/ before
+# counting), so the word "admit"/"sorry" inside the scaffold BANNERS that
+# *describe the deleted cheats* ("whose proof body was `sorry`", "by `admit`")
+# no longer counts. The real machine count is SORRY=0 ADMIT=0 AXIOM=0; the
+# 8 banner mentions surface as a prose [warn] only. The budget is the truth (0),
+# so any genuinely NEW live sorry/admit/axiom trips the gate immediately.
+# The headline threshold claim is honestly "research-only", not "proven".
+SORRY=0
+ADMIT=0
 AXIOM=0
 VACUOUS=0
