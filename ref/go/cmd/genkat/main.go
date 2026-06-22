@@ -257,7 +257,9 @@ func main() {
 				r1s[i] = r1
 				r2s[i] = r2
 			}
-			sig, evidences, err := pm.Combine(pm.ThbsSeCombineInput{
+			// genkat is a research/KAT-vector tool; the seed-reconstructing
+			// combiner requires the explicit runtime acknowledgement.
+			sig, evidences, err := pm.Combine(pm.AckThbsSeReconstructsSeed, pm.ThbsSeCombineInput{
 				Key:     key,
 				Binding: binding,
 				Message: msg,

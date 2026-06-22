@@ -344,7 +344,7 @@ func TestThbsSE_StrictAtom_Combine_ByteIdentityToCircl(t *testing.T) {
 				Round1:  r1s,
 				Round2:  r2s,
 			}
-			sig, evidences, err := Combine(input)
+			sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 			if err != nil {
 				t.Fatalf("Combine: %v", err)
 			}
@@ -401,7 +401,7 @@ func TestThbsSE_StrictAtom_Combine_DerivedPkSeedCrossCheck(t *testing.T) {
 		Round1:  r1s,
 		Round2:  r2s,
 	}
-	_, _, err = Combine(input)
+	_, _, err = Combine(AckThbsSeReconstructsSeed, input)
 	if err == nil {
 		t.Fatalf("Combine accepted a tampered pkSeed in the PublicKey")
 	}
@@ -537,7 +537,7 @@ func benchStrictAtomSignMode(b *testing.B, mode Mode, n, t int) {
 			r1s = append(r1s, r1)
 			r2s = append(r2s, r2)
 		}
-		sig, _, err := Combine(ThbsSeCombineInput{
+		sig, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{
 			Key:     key,
 			Binding: binding,
 			Message: msg,

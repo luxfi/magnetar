@@ -802,7 +802,7 @@ func TestPVSS_DKG_EndToEnd_SignAndVerify(t *testing.T) {
 				r2s = append(r2s, r2)
 			}
 
-			sig, _, err := Combine(ThbsSeCombineInput{
+			sig, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{
 				Key:     key,
 				Binding: binding,
 				Message: msg,
