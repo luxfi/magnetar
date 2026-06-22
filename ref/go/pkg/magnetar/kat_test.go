@@ -314,7 +314,7 @@ func TestKAT_ThbsSe(t *testing.T) {
 				r2s[i] = r2
 			}
 
-			sig, evidences, err := Combine(ThbsSeCombineInput{
+			sig, evidences, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{
 				Key:     key,
 				Binding: binding,
 				Message: msg,

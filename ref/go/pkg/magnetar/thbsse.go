@@ -799,6 +799,26 @@ type ThbsSeCombineInput struct {
 	Round2  []ThbsSeRound2Msg
 }
 
+// ThbsSeReconstructAck is the explicit hazard acknowledgement required by
+// Combine. The THBS-SE combine path reconstructs the FIPS 205 master seed at
+// the public combiner — it is RESEARCH-ONLY; production finality uses the
+// standalone per-validator leg aggregated via STARK-QC (no seed ever formed).
+// This is a RUNTIME barrier (no build tags — one native binary), greppable in
+// review (grep for IUnderstandThisReconstructsTheSeed).
+type ThbsSeReconstructAck struct{ ack string }
+
+// AckThbsSeReconstructsSeed is the only value Combine accepts; its single
+// field documents the hazard at the call site.
+var AckThbsSeReconstructsSeed = ThbsSeReconstructAck{ack: "IUnderstandThisReconstructsTheSeed"}
+
+// ErrThbsSeResearchOnly is returned when Combine is invoked without the
+// explicit AckThbsSeReconstructsSeed acknowledgement.
+var ErrThbsSeResearchOnly = errors.New(
+	"magnetar/thbsse: seed-reconstructing Combine is RESEARCH-ONLY (it " +
+		"reconstructs the FIPS 205 master seed at the combiner); pass " +
+		"AckThbsSeReconstructsSeed to confirm, or use the standalone " +
+		"per-validator leg aggregated via STARK-QC for production")
+
 // Combine is the PUBLIC combiner. It is a pure function of its
 // inputs — anyone with the public ThbsSeKey, the slot binding, the
 // message, and >= t valid Round-1/Round-2 pairs can produce the
@@ -838,7 +858,13 @@ type ThbsSeCombineInput struct {
 // return. The returned Signature is the FIPS 205 wire-format
 // bytes; it verifies under unmodified slhdsa.Verify against
 // (key.PublicKey, msg, ctx=ctxFromSlot(binding)).
-func Combine(input ThbsSeCombineInput) (*Signature, []ThbsSeShareEvidence, error) {
+func Combine(ack ThbsSeReconstructAck, input ThbsSeCombineInput) (*Signature, []ThbsSeShareEvidence, error) {
+	// Runtime research-only barrier (mirrors OpenRevealAck; NO build tags —
+	// one native binary). The THBS-SE combiner reconstructs the FIPS 205
+	// master seed; refuse unless the caller explicitly acknowledges it.
+	if ack != AckThbsSeReconstructsSeed {
+		return nil, nil, ErrThbsSeResearchOnly
+	}
 	if input.Key == nil {
 		return nil, nil, errors.New("magnetar/thbsse: nil key")
 	}

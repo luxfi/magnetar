@@ -3,7 +3,18 @@
 
 package magnetar
 
-// thbsse_assemble.go — THBS-SE Combine emit path.
+// thbsse_assemble.go — THBS-SE Combine emit path (RESEARCH-ONLY at RUNTIME).
+//
+// This path reconstructs the FIPS 205 master seed at the combiner; it is
+// gated at RUNTIME by the `AckThbsSeReconstructsSeed` acknowledgement in
+// Combine (no build tags — one native binary). Without the ack, Combine
+// refuses with ErrThbsSeResearchOnly. It is
+// the seed-reconstructing emit path: it Lagrange-RECONSTRUCTS the full FIPS
+// 205 master into the combiner's process memory for one Sign call. That is
+// research-grade, not no-leak, so the "research-only" status is ENFORCED by
+// the build constraint above — not by prose. The production counterpart is
+// thbsse_assemble_production.go, whose assembleSignatureBytes refuses with
+// ErrThbsSeResearchOnly and never reconstructs the master.
 //
 // =====================================================================
 //  HONEST SUMMARY: THIS PATH RECONSTRUCTS THE FIPS 205 MASTER

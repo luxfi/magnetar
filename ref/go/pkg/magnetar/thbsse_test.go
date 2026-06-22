@@ -120,7 +120,7 @@ func TestThbsSE_Wire_FIPS205Verifiable(t *testing.T) {
 				Round1:  r1s,
 				Round2:  r2s,
 			}
-			sig, evidences, err := Combine(input)
+			sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 			if err != nil {
 				t.Fatalf("Combine: %v", err)
 			}
@@ -227,7 +227,7 @@ func TestThbsSE_RejectSeedReveal(t *testing.T) {
 		Round1:  r1s,
 		Round2:  r2s,
 	}
-	sig, evidences, err := Combine(input)
+	sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 	if err == nil {
 		// 2 of 3 shares are honest — Combine succeeded because we
 		// over-provisioned. Check that exactly one evidence was emitted
@@ -293,7 +293,7 @@ func TestThbsSE_RejectOversizedShareWireSize(t *testing.T) {
 		Round1:  r1s,
 		Round2:  r2s,
 	}
-	sig, evidences, err := Combine(input)
+	sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 	if err == nil {
 		t.Fatalf("Combine accepted a tampered (extra-bytes) share, sig=%v evidences=%+v", sig, evidences)
 	}
@@ -351,7 +351,7 @@ func TestThbsSE_RejectTamperedShareCommitMismatch(t *testing.T) {
 		Round1:  r1s,
 		Round2:  r2s,
 	}
-	sig, evidences, err := Combine(input)
+	sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 	if err == nil {
 		t.Fatalf("Combine accepted a tampered WOTS reveal, sig=%v evidences=%+v", sig, evidences)
 	}
@@ -465,7 +465,7 @@ func TestThbsSE_OverselectedCommittee(t *testing.T) {
 		Round1:  r1s,
 		Round2:  r2s,
 	}
-	sig, evidences, err := Combine(input)
+	sig, evidences, err := Combine(AckThbsSeReconstructsSeed, input)
 	if err != nil {
 		t.Fatalf("Combine with 4 honest of 7 (t=3): %v", err)
 	}
@@ -516,11 +516,11 @@ func TestThbsSE_PublicCombiner_Determinism(t *testing.T) {
 		Round1:  []ThbsSeRound1Msg{r1s[1], r1s[3], r1s[5]},
 		Round2:  []ThbsSeRound2Msg{r2s[1], r2s[3], r2s[5]},
 	}
-	sigA, _, err := Combine(subA)
+	sigA, _, err := Combine(AckThbsSeReconstructsSeed, subA)
 	if err != nil {
 		t.Fatalf("Combine A: %v", err)
 	}
-	sigB, _, err := Combine(subB)
+	sigB, _, err := Combine(AckThbsSeReconstructsSeed, subB)
 	if err != nil {
 		t.Fatalf("Combine B: %v", err)
 	}
@@ -556,11 +556,11 @@ func TestThbsSE_SlotBindingDomainSeparation(t *testing.T) {
 
 	r1sA, r2sA := runRound1Across(t, params, key, bindingA, msg, []int{0, 1, 2})
 	r1sB, r2sB := runRound1Across(t, params, key, bindingB, msg, []int{0, 1, 2})
-	sigA, _, err := Combine(ThbsSeCombineInput{Key: key, Binding: bindingA, Message: msg, Round1: r1sA, Round2: r2sA})
+	sigA, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{Key: key, Binding: bindingA, Message: msg, Round1: r1sA, Round2: r2sA})
 	if err != nil {
 		t.Fatalf("Combine A: %v", err)
 	}
-	sigB, _, err := Combine(ThbsSeCombineInput{Key: key, Binding: bindingB, Message: msg, Round1: r1sB, Round2: r2sB})
+	sigB, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{Key: key, Binding: bindingB, Message: msg, Round1: r1sB, Round2: r2sB})
 	if err != nil {
 		t.Fatalf("Combine B: %v", err)
 	}
@@ -635,7 +635,7 @@ func benchThbsSeSignMode(b *testing.B, mode Mode, n, t int) {
 			r1s = append(r1s, r1)
 			r2s = append(r2s, r2)
 		}
-		sig, _, err := Combine(ThbsSeCombineInput{
+		sig, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{
 			Key:     key,
 			Binding: binding,
 			Message: msg,
@@ -660,5 +660,23 @@ func makeThbsSeBindingBench(slot uint64) *ThbsSeSlotBinding {
 		Height:        100,
 		CommitteeID:   []byte("bench-committee-A"),
 		MessageDomain: []byte("polaris-cert"),
+	}
+}
+
+// TestThbsSE_Combine_ResearchOnlyRuntimeBarrier pins the RUNTIME research-only
+// gate on the seed-reconstructing combiner — NO build tags, one native binary.
+// Without the explicit AckThbsSeReconstructsSeed acknowledgement, Combine
+// refuses immediately (before any reconstruction); with it, the barrier is
+// passed (and the call then fails only on the empty input).
+func TestThbsSE_Combine_ResearchOnlyRuntimeBarrier(t *testing.T) {
+	// Zero-value ack (the only ack an outside caller can forge — the field is
+	// unexported) is refused.
+	if _, _, err := Combine(ThbsSeReconstructAck{}, ThbsSeCombineInput{}); !errors.Is(err, ErrThbsSeResearchOnly) {
+		t.Fatalf("Combine without ack: got %v, want ErrThbsSeResearchOnly", err)
+	}
+	// With the ack the runtime barrier is passed: the error is the nil-key
+	// validation, NOT the research refusal — proving the ack let it through.
+	if _, _, err := Combine(AckThbsSeReconstructsSeed, ThbsSeCombineInput{}); err == nil || errors.Is(err, ErrThbsSeResearchOnly) {
+		t.Fatalf("Combine with ack should pass the barrier and fail on empty input, got %v", err)
 	}
 }
