@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/hero.svg" alt="magnetar" width="880"></p>
+
 # Magnetar --- SLH-DSA (FIPS 205) for Lux
 
 Magnetar is the hash-based PQ leg. SLH-DSA has no aggregatable
