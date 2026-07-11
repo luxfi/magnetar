@@ -16,7 +16,7 @@ env:
 jobs:
   test:
     name: Build + Test (linux/arm64 + linux/amd64 stub)
-    runs-on: ubuntu-latest
+    runs-on: lux-build-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -35,7 +35,7 @@ jobs:
 
   govulncheck:
     name: govulncheck
-    runs-on: ubuntu-latest
+    runs-on: lux-build-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
