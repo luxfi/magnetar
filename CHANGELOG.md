@@ -619,7 +619,7 @@ answer: each validator signs independently, the consensus layer
 collects N signatures, verification iterates per-signer. Wire size
 grows linearly with N (compressible via a Z-Chain Groth16 rollup to
 ~192 bytes, a separate primitive). This release does not change the
-custody story — M-Chain thresholdvm in TEE-attested mode continues
+custody story — M-Chain mpcvm in TEE-attested mode continues
 to use `CombineWithSeedReconstruction`. It adds the public-BFT path
 that was previously missing.
 
