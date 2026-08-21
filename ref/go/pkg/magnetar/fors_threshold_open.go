@@ -512,6 +512,13 @@ func VerifyForsThreshold(pub *ForsPublicMaterial, forsSig []byte) (bool, error) 
 	if len(pub.PkSeed) != int(internal.n) {
 		return false, ErrForsShape
 	}
+	// The digest is read by forsPkFromSig to index k message blocks; too few bytes
+	// panics there. The producing door (DistributedForsSetup) refuses the same
+	// short shape, so the verifying door must too — a malformed public input is a
+	// refused verification, not a crash.
+	if len(pub.Digest) < int((internal.k*internal.a+7)/8) {
+		return false, ErrForsShape
+	}
 	adr := pub.Addr.forsAddrBuf()
 	got := make([]byte, internal.n)
 	forsPkFromSig(internal, got, pub.PkSeed, &adr, pub.Digest, forsSig)

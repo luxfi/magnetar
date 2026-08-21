@@ -698,3 +698,47 @@ func TestThbsSE_Combine_ResearchOnlyRuntimeBarrier(t *testing.T) {
 		t.Fatalf("Combine with ack should pass the barrier and fail on empty input, got %v", err)
 	}
 }
+
+// TestReconstructGF_ReservedAndAliasedEvalPoints pins that evaluation points are
+// judged mod p: x == p is the reserved secret point 0 and is refused; x and x+p
+// are one point and are refused as a duplicate; and an unreduced but distinct
+// point reconstructs the same secret as its reduced form, so the Lagrange
+// denominator does not underflow on an unreduced input.
+func TestReconstructGF_ReservedAndAliasedEvalPoints(t *testing.T) {
+	secret := []uint16{9, 9, 9}
+	shares, err := thbsseDealRandomGF(secret, 5, 2, []byte("reserved-and-aliased-entropy-0123456789"))
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+
+	if _, err := thbsseReconstructGF(
+		[]thbsseShare{{X: thbsseSharePrime, Y: shares[0].Y}, shares[1]}, len(secret),
+	); err != ErrZeroEvalPoint {
+		t.Fatalf("x == p must be ErrZeroEvalPoint, got %v", err)
+	}
+
+	dup := thbsseShare{X: shares[1].X + thbsseSharePrime, Y: shares[1].Y}
+	if _, err := thbsseReconstructGF(
+		[]thbsseShare{shares[1], dup}, len(secret),
+	); err != ErrDuplicateEvalPoint {
+		t.Fatalf("x and x+p must be ErrDuplicateEvalPoint, got %v", err)
+	}
+
+	unreduced := thbsseShare{X: shares[1].X + thbsseSharePrime, Y: shares[1].Y}
+	got, err := thbsseReconstructGF([]thbsseShare{shares[0], unreduced}, len(secret))
+	if err != nil {
+		t.Fatalf("unreduced-point reconstruct: %v", err)
+	}
+	want, err := thbsseReconstructGF([]thbsseShare{shares[0], shares[1]}, len(secret))
+	if err != nil {
+		t.Fatalf("reduced-point reconstruct: %v", err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unreduced point gave a different secret at %d: %d vs %d", i, got[i], want[i])
+		}
+		if want[i] != secret[i] {
+			t.Fatalf("reconstruct[%d] = %d, want the dealt %d", i, want[i], secret[i])
+		}
+	}
+}
