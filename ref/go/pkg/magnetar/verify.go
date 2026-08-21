@@ -104,6 +104,12 @@ func VerifyCtx(params *Params, groupPubkey *PublicKey, message, ctx []byte, sig 
 // that touches the FIPS 205 implementation; centralising it makes
 // the wire-identity dispatch auditable as a single function.
 func slhVerify(id slhdsa.ID, packedPk, message, ctx, sig []byte) bool {
+	// id 0 is the sentinel slhdsaIDForMode returns for an unknown mode; it is not
+	// a scheme, and handing it to circl panics. A verifier must be total over its
+	// inputs — an unrecognised mode is a failed verification, not a crash.
+	if id == 0 {
+		return false
+	}
 	pk := slhdsa.PublicKey{ID: id}
 	if err := pk.UnmarshalBinary(packedPk); err != nil {
 		return false

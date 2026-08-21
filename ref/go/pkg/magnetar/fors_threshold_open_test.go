@@ -202,3 +202,30 @@ func TestForsThreshold_CommitMismatch_Rejected(t *testing.T) {
 		t.Fatalf("expected ErrForsCommitMismatch for tampered share, got %v", err)
 	}
 }
+
+// TestVerifyForsThreshold_RefusesShortDigest pins that the verifying door
+// length-checks the public digest before forsPkFromSig indexes it: a digest one
+// byte short of ceil(k*a/8) is refused with ErrForsShape, not a panic.
+func TestVerifyForsThreshold_RefusesShortDigest(t *testing.T) {
+	params := MustParamsFor(ModeM192s)
+	internal, ok := internalParamsForMode(ModeM192s)
+	if !ok {
+		t.Fatal("internal params for ModeM192s")
+	}
+	need := int((internal.k*internal.a + 7) / 8)
+	pub := &ForsPublicMaterial{
+		Params:    params,
+		Digest:    make([]byte, need-1),
+		AuthPaths: make([][]byte, internal.k),
+		PkFors:    make([]byte, internal.n),
+		PkSeed:    make([]byte, internal.n),
+		Threshold: 1,
+	}
+	ok2, err := VerifyForsThreshold(pub, make([]byte, internal.forsSigSize()))
+	if ok2 {
+		t.Fatal("a short digest must not verify")
+	}
+	if err != ErrForsShape {
+		t.Fatalf("short digest must be ErrForsShape, got %v", err)
+	}
+}

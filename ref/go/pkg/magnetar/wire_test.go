@@ -817,3 +817,15 @@ func TestMagnetar_Wire_VerifyBytesCtx_RoundTrip(t *testing.T) {
 		t.Fatalf("VerifyBytesCtx accepted an over-long ctx")
 	}
 }
+
+// TestSlhVerify_TotalOverUnknownMode pins that verification is total over its
+// mode input: an unknown mode resolves to the zero (invalid) id, and slhVerify
+// under it returns false rather than handing a non-scheme to circl, which panics.
+func TestSlhVerify_TotalOverUnknownMode(t *testing.T) {
+	if slhdsaIDForMode(Mode(0x7F)) != 0 {
+		t.Fatal("an unknown mode must resolve to the zero (invalid) id")
+	}
+	if slhVerify(slhdsaIDForMode(Mode(0x7F)), make([]byte, 48), nil, nil, make([]byte, 16224)) {
+		t.Fatal("verification under an unknown scheme must return false")
+	}
+}

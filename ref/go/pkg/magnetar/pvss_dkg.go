@@ -1100,6 +1100,12 @@ func RunDKG(
 func AggregateShareEnvelope(tr *PVSSTranscript, qualified map[uint32]struct{}, partyIndex uint32) []uint16 {
 	L := tr.Params.SeedSize
 	out := make([]uint16, L)
+	// partyIndex is 1-based (party p reads ReceivedShares[p-1]). A zero or
+	// out-of-range index would wrap partyIndex-1 to a huge uint and panic; an
+	// unknown party aggregates to the zero row, not a crash.
+	if partyIndex < 1 || int(partyIndex) > len(tr.ReceivedShares) {
+		return out
+	}
 	for i := 0; i < tr.Params.committeeSize(tr.Committee); i++ {
 		if _, ok := qualified[uint32(i+1)]; !ok {
 			continue

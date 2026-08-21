@@ -945,3 +945,22 @@ func TestPVSS_DKG_RaceClean(t *testing.T) {
 		t.Errorf("concurrent DKG run failed: %v", err)
 	}
 }
+
+// TestAggregateShareEnvelope_RefusesOutOfRangeParty pins that a 1-based party
+// index out of range aggregates to the zero row rather than wrapping partyIndex-1
+// to a huge uint and panicking.
+func TestAggregateShareEnvelope_RefusesOutOfRangeParty(t *testing.T) {
+	params := MustParamsFor(ModeM192s)
+	tr := &PVSSTranscript{Params: params, Committee: make([]NodeID, 3)}
+	for _, idx := range []uint32{0, 99} {
+		row := AggregateShareEnvelope(tr, map[uint32]struct{}{}, idx)
+		if len(row) != params.SeedSize {
+			t.Fatalf("index %d: width %d, want %d", idx, len(row), params.SeedSize)
+		}
+		for b, v := range row {
+			if v != 0 {
+				t.Fatalf("index %d: out-of-range party must aggregate to zero, got %d at %d", idx, v, b)
+			}
+		}
+	}
+}

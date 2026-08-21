@@ -181,18 +181,26 @@ func thbsseReconstructGF(shares []thbsseShare, seedSize int) ([]uint16, error) {
 	if len(shares) < 1 {
 		return out, ErrNotEnoughShares
 	}
+	// Reduce every evaluation point mod p once, and guard on the reduced value.
+	// A raw x of 257 (== p) is the reserved secret point 0, and x and x+257 are
+	// one point presented twice; comparing raw values would admit both. The
+	// reduced points also keep the Lagrange denominator below from underflowing —
+	// (p + x_i - x_j) is positive only when x_j < p.
 	seen := make(map[uint32]struct{}, len(shares))
-	for _, s := range shares {
-		if s.X == 0 {
+	xs := make([]uint32, len(shares))
+	for idx, s := range shares {
+		xr := s.X % thbsseSharePrime
+		if xr == 0 {
 			return out, ErrZeroEvalPoint
 		}
-		if _, dup := seen[s.X]; dup {
+		if _, dup := seen[xr]; dup {
 			return out, ErrDuplicateEvalPoint
 		}
-		seen[s.X] = struct{}{}
+		seen[xr] = struct{}{}
 		if len(s.Y) != seedSize {
 			return out, ErrShareWireSize
 		}
+		xs[idx] = xr
 	}
 
 	t := len(shares)
@@ -206,9 +214,9 @@ func thbsseReconstructGF(shares []thbsseShare, seedSize int) ([]uint16, error) {
 			if i == j {
 				continue
 			}
-			negXj := thbsseSharePrime - (shares[j].X % thbsseSharePrime)
+			negXj := thbsseSharePrime - xs[j]
 			num = (num * negXj) % thbsseSharePrime
-			diff := (thbsseSharePrime + shares[i].X - shares[j].X) % thbsseSharePrime
+			diff := (thbsseSharePrime + xs[i] - xs[j]) % thbsseSharePrime
 			den = (den * diff) % thbsseSharePrime
 		}
 		denInv := thbsseModInvSmall(den, thbsseSharePrime)
