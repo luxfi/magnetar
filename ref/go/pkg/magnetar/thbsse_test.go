@@ -424,9 +424,12 @@ func TestThbsSE_SlotReuseRejected(t *testing.T) {
 		t.Fatalf("idempotent replay produced different partial_sig")
 	}
 
-	// VerifyThbsSeEvidence must accept the equivocation evidence.
+	// VerifyThbsSeEvidence must accept the equivocation evidence when anchored
+	// to the accused's real committee share (read from the published committee,
+	// never from the evidence blob).
+	share := key.Shares[0].Share
 	ev := eq.Evidence()
-	if !VerifyThbsSeEvidence(params, ev, msgA, msgB, binding, binding) {
+	if !VerifyThbsSeEvidence(params, ev, share, msgA, msgB, binding, binding) {
 		t.Fatalf("VerifyThbsSeEvidence rejected genuine evidence")
 	}
 
@@ -434,8 +437,23 @@ func TestThbsSE_SlotReuseRejected(t *testing.T) {
 	// reject (no equivocation if both digests equal).
 	bad := ev
 	bad.NewDigest = ev.PriorDigest
-	if VerifyThbsSeEvidence(params, bad, msgA, msgA, binding, binding) {
+	if VerifyThbsSeEvidence(params, bad, share, msgA, msgA, binding, binding) {
 		t.Fatalf("VerifyThbsSeEvidence accepted tampered evidence with equal digests")
+	}
+
+	// Fabricated evidence naming this party but carrying reveals it never
+	// produced must be refused: the reveals do not unmask to the party's share.
+	// This is the property that keeps the check from slashing an honest
+	// validator on a byte string of the accuser's choosing.
+	forged := ev
+	forgedSig := make([]byte, 4*params.SeedSize) // mask || masked, each 2*SeedSize
+	for i := range forgedSig {
+		forgedSig[i] = 0x5a
+	}
+	forged.PriorR2.PartialSig = forgedSig
+	forged.PriorR1.Commit = deriveThbsSeCommit(params, forged.PriorR2.PartialSig, binding, msgA, forged.PartyID)
+	if VerifyThbsSeEvidence(params, forged, share, msgA, msgB, binding, binding) {
+		t.Fatalf("VerifyThbsSeEvidence accepted fabricated reveals that do not unmask to the share")
 	}
 }
 

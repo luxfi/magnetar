@@ -43,8 +43,10 @@ package magnetar
 //      typed ThbsSeShareEvidence blob from Combine. Any third
 //      party verifies the evidence against the committee's
 //      published commitment material via
-//      VerifyThbsSeShareEvidence / VerifyThbsSeEvidence — both
-//      pure functions with no committee state required.
+//      VerifyThbsSeShareEvidence / VerifyThbsSeEvidence. Both are
+//      pure functions, but not self-contained: the equivocation
+//      check anchors both reveals to the accused's dealt share, so
+//      fabricated bytes naming a victim who never signed are refused.
 //
 //   5. OVER-SELECTED COMMITTEE. (n, t) with n > t tolerates up to
 //      n-t silent withholders. Combine picks any t valid
@@ -204,6 +206,7 @@ package magnetar
 //     VerifyThbsSeEvidence.
 
 import (
+	"crypto/subtle"
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
@@ -598,15 +601,22 @@ func (e *ThbsSeEquivocationError) Evidence() ThbsSeEvidence {
 	}
 }
 
-// VerifyThbsSeEvidence is the third-party check that the evidence
-// blob is genuine: both Round-1 commits must re-derive correctly
-// from the matching Round-2 reveals + slot binding, and the two
-// digests must differ. This is the canonical evidence-verification
-// check the consensus layer runs before slashing.
+// VerifyThbsSeEvidence is the third-party check that the evidence blob is a
+// genuine equivocation by the accused: both Round-1 commits re-derive from the
+// matching Round-2 reveals + slot binding, the two digests differ, AND both
+// reveals unmask to the accused's real committee share. The caller passes that
+// share (`share`) from the published committee, never from the evidence.
 //
-// It is a pure function with no committee state required — the
-// PartyID + slot + digests are self-contained.
-func VerifyThbsSeEvidence(params *Params, ev ThbsSeEvidence, msgPrior, msgNew []byte, bindingPrior, bindingNew *ThbsSeSlotBinding) bool {
+// The share anchor is what makes the check sound. Without it the commit is only
+// a hash the accuser recomputes over bytes it supplies, so the structural
+// checks pass for fabricated reveals naming any victim — a byte string of one's
+// choosing would slash an honest validator that never signed. Requiring both
+// reveals to unmask to the dealt share ties the evidence to a party that holds
+// it: a forger who lacks the share cannot produce a mask/masked pair that
+// unmasks to it. This surface is the research-only THBS-SE reconstruct path
+// where the share is available to the combiner; production finality slashes via
+// verified cert-equivocation (luxfi/consensus core/slashing), not this.
+func VerifyThbsSeEvidence(params *Params, ev ThbsSeEvidence, share []byte, msgPrior, msgNew []byte, bindingPrior, bindingNew *ThbsSeSlotBinding) bool {
 	if err := params.Validate(); err != nil {
 		return false
 	}
@@ -640,7 +650,34 @@ func VerifyThbsSeEvidence(params *Params, ev ThbsSeEvidence, msgPrior, msgNew []
 		return false
 	}
 	newCommit := deriveThbsSeCommit(params, ev.NewR2.PartialSig, bindingNew, msgNew, ev.PartyID)
-	return newCommit == ev.NewR1.Commit
+	if newCommit != ev.NewR1.Commit {
+		return false
+	}
+	// The authenticity gate, last: both reveals must unmask to the accused's real
+	// committee share. Everything above is self-consistency the accuser can also
+	// compute — fabricated bytes naming a victim satisfy it. Only this ties the
+	// blob to a party that holds the share; a forger who lacks it cannot produce a
+	// mask/masked pair that unmasks to it.
+	if !thbsSeUnmasksToShare(ev.PriorR2.PartialSig, maskLen, share) {
+		return false
+	}
+	return thbsSeUnmasksToShare(ev.NewR2.PartialSig, maskLen, share)
+}
+
+// thbsSeUnmasksToShare reports whether partialSig (mask || masked_share)
+// unmasks to share. Constant-time in the share bytes so the verifier cannot be
+// turned into an oracle that recovers the share one guess at a time.
+func thbsSeUnmasksToShare(partialSig []byte, maskLen int, share []byte) bool {
+	if len(partialSig) != 2*maskLen || len(share) != maskLen {
+		return false
+	}
+	recovered := make([]byte, maskLen)
+	mask := partialSig[:maskLen]
+	masked := partialSig[maskLen:]
+	for i := 0; i < maskLen; i++ {
+		recovered[i] = mask[i] ^ masked[i]
+	}
+	return subtle.ConstantTimeCompare(recovered, share) == 1
 }
 
 // deriveThbsSeCommit computes the Round-1 commit
@@ -1036,7 +1073,15 @@ func VerifyThbsSeShareEvidence(params *Params, ev ThbsSeShareEvidence, binding *
 	case ThbsSeShareWireSize:
 		return len(ev.PartialSig) != 2*params.SeedSize*2 || len(ev.PartialSig) == 0
 	case ThbsSeShareSlotMismatch:
-		return true
+		// The blob carries only (PartyID, Reason): no reveal, no
+		// offending slot, no broadcast from the accused. There is
+		// nothing to recompute and nothing that ties the named party
+		// to a fault, so it is not proof — refuse it. A slot-mismatch
+		// a third party can slash on requires the accused's own signed
+		// Round-2 reveal carrying the foreign slot; verifying that is
+		// the identity-key evidence-signing lift (AXIOM-INVENTORY.md),
+		// not a recomputation any observer can run against a name.
+		return false
 	default:
 		return false
 	}
